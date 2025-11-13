@@ -1,0 +1,539 @@
+package security
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"mcp-bash-tools/pkg/logger"
+)
+
+// Mock logger for testing
+type mockLogger struct {
+	logs []string
+}
+
+func (m *mockLogger) Info(args ...interface{}) {
+	m.logs = append(m.logs, args[0].(string))
+}
+
+func (m *mockLogger) Error(args ...interface{}) {
+	m.logs = append(m.logs, args[0].(string))
+}
+
+func newMockLogger() *mockLogger {
+	return &mockLogger{logs: make([]string, 0)}
+}
+
+func TestSecurityManager_NewSecurityManager(t *testing.T) {
+	config := SecurityConfig{
+		EnableAuth:       false,
+		EnableRateLimit:  false,
+		EnableInputFilter: false,
+		MaxCommandLength: 1000,
+		EnableAudit:      true,
+	}
+
+	logger := newMockLogger()
+	sm := NewSecurityManager(config, logger)
+
+	assert.NotNil(t, sm)
+	assert.Equal(t, config, sm.config)
+	assert.NotNil(t, sm.rateLimiter)
+	assert.NotNil(t, sm.commandValidator)
+}
+
+func TestSecurityManager_Authenticate_Disabled(t *testing.T) {
+	config := SecurityConfig{
+		EnableAuth: false,
+	}
+
+	logger := newMockLogger()
+	sm := NewSecurityManager(config, logger)
+
+	ctx := context.Background()
+	auth, err := sm.Authenticate(ctx, "any-token")
+
+	assert.NoError(t, err)
+	assert.NotNil(t, auth)
+	assert.Equal(t, "anonymous", auth.UserID)
+	assert.Equal(t, "anonymous", auth.Username)
+	assert.Contains(t, auth.Permissions, "execute")
+}
+
+func TestSecurityManager_Authenticate_Enabled(t *testing.T) {
+	config := SecurityConfig{
+		EnableAuth: true,
+	}
+
+	logger := newMockLogger()
+	sm := NewSecurityManager(config, logger)
+
+	ctx := context.Background()
+	
+	// Test valid token
+	auth, err := sm.Authenticate(ctx, "demo-token")
+	assert.NoError(t, err)
+	assert.NotNil(t, auth)
+	assert.Equal(t, "demo-user", auth.UserID)
+
+	// Test invalid token
+	auth, err = sm.Authenticate(ctx, "invalid-token")
+	assert.Error(t, err)
+	assert.Nil(t, auth)
+}
+
+func TestSecurityManager_ValidateCommand_Success(t *testing.T) {
+	config := SecurityConfig{
+		EnableAuth:       false,
+		EnableRateLimit:  false,
+		EnableInputFilter: true,
+		MaxCommandLength: 1000,
+		EnableAudit:      true,
+	}
+
+	logger := newMockLogger()
+	sm := NewSecurityManager(config, logger)
+
+	ctx := context.Background()
+	auth := &AuthContext{
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	err := sm.ValidateCommand(ctx, "echo hello", auth)
+	assert.NoError(t, err)
+}
+
+func TestSecurityManager_ValidateCommand_TooLong(t *testing.T) {
+	config := SecurityConfig{
+		EnableAuth:       false,
+		EnableRateLimit:  false,
+		EnableInputFilter: true,
+		MaxCommandLength: 10,
+		EnableAudit:      true,
+	}
+
+	logger := newMockLogger()
+	sm := NewSecurityManager(config, logger)
+
+	ctx := context.Background()
+	auth := &AuthContext{
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	longCommand := "echo this is a very long command that exceeds the limit"
+	err := sm.ValidateCommand(ctx, longCommand, auth)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "command too long")
+}
+
+func TestRateLimiter_Allow_Success(t *testing.T) {
+	config := RateLimiterConfig{
+		RPS:      10,
+		Burst:    20,
+		Interval: time.Second,
+	}
+
+	rl := NewRateLimiter(config)
+
+	// Should allow requests within burst limit
+	for i := 0; i < 20; i++ {
+		err := rl.Allow("test-user")
+		assert.NoError(t, err)
+	}
+}
+
+func TestRateLimiter_Allow_ExceedBurst(t *testing.T) {
+	config := RateLimiterConfig{
+		RPS:      1,
+		Burst:    2,
+		Interval: time.Second,
+	}
+
+	rl := NewRateLimiter(config)
+
+	// Should allow up to burst limit
+	err := rl.Allow("test-user")
+	assert.NoError(t, err)
+
+	err = rl.Allow("test-user")
+	assert.NoError(t, err)
+
+	// Next request should be rate limited
+	err = rl.Allow("test-user")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "rate limit exceeded")
+}
+
+func TestCommandValidator_Validate_Success(t *testing.T) {
+	config := ValidationConfig{
+		MaxCommandLength:   1000,
+		AllowShellCommands: false,
+		AllowedCommands:    []string{"echo", "ls", "pwd"},
+	}
+
+	cv := NewCommandValidator(config)
+
+	// Test allowed commands
+	err := cv.Validate("echo hello")
+	assert.NoError(t, err)
+
+	err = cv.Validate("ls -la")
+	assert.NoError(t, err)
+
+	err = cv.Validate("pwd")
+	assert.NoError(t, err)
+}
+
+func TestCommandValidator_Validate_BlockedCommand(t *testing.T) {
+	config := ValidationConfig{
+		MaxCommandLength:   1000,
+		AllowShellCommands: false,
+		BlockedCommands:    []string{"rm", "del", "format"},
+	}
+
+	cv := NewCommandValidator(config)
+
+	// Test blocked commands
+	err := cv.Validate("rm -rf /")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "dangerous command detected")
+
+	err = cv.Validate("del file.txt")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "dangerous command detected")
+
+	err = cv.Validate("format c:")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "dangerous command detected")
+}
+
+func TestCommandValidator_Validate_TooLong(t *testing.T) {
+	config := ValidationConfig{
+		MaxCommandLength: 10,
+	}
+
+	cv := NewCommandValidator(config)
+
+	err := cv.Validate("echo this command is way too long")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "command too long")
+}
+
+func TestCommandValidator_Validate_ForkBomb(t *testing.T) {
+	config := ValidationConfig{
+		MaxCommandLength: 1000,
+	}
+
+	cv := NewCommandValidator(config)
+
+	// Test fork bomb pattern
+	err := cv.Validate(":(){ :|:& };:")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "dangerous command detected")
+}
+
+func TestJWTAuthProvider_Authenticate_Success(t *testing.T) {
+	logger := newMockLogger()
+	provider := NewJWTAuthProvider("test-secret", logger)
+
+	ctx := context.Background()
+	auth, err := provider.Authenticate(ctx, "demo-token")
+
+	assert.NoError(t, err)
+	assert.NotNil(t, auth)
+	assert.Equal(t, "demo-user", auth.UserID)
+	assert.Equal(t, "demo", auth.Username)
+}
+
+func TestJWTAuthProvider_Authenticate_Failure(t *testing.T) {
+	logger := newMockLogger()
+	provider := NewJWTAuthProvider("test-secret", logger)
+
+	ctx := context.Background()
+	
+	// Test empty token
+	auth, err := provider.Authenticate(ctx, "")
+	assert.Error(t, err)
+	assert.Nil(t, auth)
+	assert.Contains(t, err.Error(), "token is required")
+
+	// Test invalid token
+	auth, err = provider.Authenticate(ctx, "invalid-token")
+	assert.Error(t, err)
+	assert.Nil(t, auth)
+	assert.Contains(t, err.Error(), "invalid token")
+}
+
+func TestJWTAuthProvider_ValidatePermissions_Success(t *testing.T) {
+	logger := newMockLogger()
+	provider := NewJWTAuthProvider("test-secret", logger)
+
+	ctx := context.Background()
+	auth := &AuthContext{
+		UserID:      "test-user",
+		Permissions: []string{"execute", "read", "write"},
+	}
+
+	err := provider.ValidatePermissions(ctx, auth, []string{"execute"})
+	assert.NoError(t, err)
+
+	err = provider.ValidatePermissions(ctx, auth, []string{"read"})
+	assert.NoError(t, err)
+
+	err = provider.ValidatePermissions(ctx, auth, []string{"execute", "read"})
+	assert.NoError(t, err)
+}
+
+func TestJWTAuthProvider_ValidatePermissions_Failure(t *testing.T) {
+	logger := newMockLogger()
+	provider := NewJWTAuthProvider("test-secret", logger)
+
+	ctx := context.Background()
+	auth := &AuthContext{
+		UserID:      "test-user",
+		Permissions: []string{"read"},
+	}
+
+	err := provider.ValidatePermissions(ctx, auth, []string{"execute"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "permission 'execute' not granted")
+
+	err = provider.ValidatePermissions(ctx, auth, []string{"write"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "permission 'write' not granted")
+}
+
+func TestAuthContext_HelperFunctions(t *testing.T) {
+	auth := &AuthContext{
+		UserID:      "test-user",
+		Username:    "test",
+		Permissions: []string{"execute"},
+		SessionID:   "test-session",
+	}
+
+	ctx := context.Background()
+	
+	// Test setting and getting auth context
+	ctx = SetAuthContext(ctx, auth)
+	
+	retrievedAuth, exists := GetAuthContext(ctx)
+	assert.True(t, exists)
+	assert.Equal(t, auth.UserID, retrievedAuth.UserID)
+	assert.Equal(t, auth.Username, retrievedAuth.Username)
+	assert.Equal(t, auth.SessionID, retrievedAuth.SessionID)
+}
+
+func TestTokenBucket_Allow(t *testing.T) {
+	bucket := NewTokenBucket(5, 2)
+
+	// Should allow up to capacity
+	for i := 0; i < 5; i++ {
+		err := bucket.Allow()
+		assert.NoError(t, err)
+	}
+
+	// Next request should fail
+	err := bucket.Allow()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "rate limit exceeded")
+}
+
+func TestTokenBucket_Refill(t *testing.T) {
+	bucket := NewTokenBucket(2, 1)
+
+	// Consume all tokens
+	err := bucket.Allow()
+	assert.NoError(t, err)
+
+	err = bucket.Allow()
+	assert.NoError(t, err)
+
+	// Should be rate limited
+	err = bucket.Allow()
+	assert.Error(t, err)
+
+	// Wait for refill and try again
+	time.Sleep(1100 * time.Millisecond)
+	err = bucket.Allow()
+	assert.NoError(t, err)
+}
+
+func TestSecurityManager_WrapHandler(t *testing.T) {
+	config := SecurityConfig{
+		EnableAuth:      false,
+		EnableRateLimit: false,
+	}
+
+	logger := newMockLogger()
+	sm := NewSecurityManager(config, logger)
+
+	handler := func(ctx context.Context) error {
+		return nil
+	}
+
+	wrappedHandler := sm.WrapHandler(handler)
+
+	ctx := context.Background()
+	err := wrappedHandler(ctx)
+	assert.NoError(t, err)
+
+	// Test that security context is set
+	securityEnabled := ctx.Value("security_enabled")
+	assert.NotNil(t, securityEnabled)
+	assert.Equal(t, false, securityEnabled.(bool))
+}
+
+func TestCommandValidator_Validate_AllowedCommandsOnly(t *testing.T) {
+	config := ValidationConfig{
+		MaxCommandLength: 1000,
+		AllowedCommands:  []string{"ls", "echo"},
+	}
+
+	cv := NewCommandValidator(config)
+
+	// Test allowed commands
+	err := cv.Validate("ls -la")
+	assert.NoError(t, err)
+
+	err = cv.Validate("echo hello")
+	assert.NoError(t, err)
+
+	// Test disallowed command
+	err := cv.Validate("pwd")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "command not in allowed list")
+}
+
+func TestRateLimiter_Cleanup(t *testing.T) {
+	config := RateLimiterConfig{
+		RPS:      10,
+		Burst:    20,
+		Interval: time.Second,
+	}
+
+	rl := NewRateLimiter(config)
+
+	// Create some buckets
+	rl.Allow("user1")
+	rl.Allow("user2")
+	rl.Allow("user3")
+
+	assert.Len(t, rl.buckets, 3)
+
+	// Cleanup should not remove active buckets
+	rl.Cleanup()
+	assert.Len(t, rl.buckets, 3)
+
+	// Test cleanup logic (simulating old buckets)
+	// This is a basic test - in practice, we'd need to manipulate timestamps
+}
+
+// Benchmark tests
+func BenchmarkSecurityManager_ValidateCommand(b *testing.B) {
+	config := SecurityConfig{
+		EnableAuth:       false,
+		EnableRateLimit:  false,
+		EnableInputFilter: true,
+		MaxCommandLength: 1000,
+	}
+
+	logger := newMockLogger()
+	sm := NewSecurityManager(config, logger)
+
+	ctx := context.Background()
+	auth := &AuthContext{
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sm.ValidateCommand(ctx, "echo hello world", auth)
+	}
+}
+
+func BenchmarkRateLimiter_Allow(b *testing.B) {
+	config := RateLimiterConfig{
+		RPS:      1000,
+		Burst:    2000,
+		Interval: time.Second,
+	}
+
+	rl := NewRateLimiter(config)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rl.Allow("benchmark-user")
+	}
+}
+
+func BenchmarkCommandValidator_Validate(b *testing.B) {
+	config := ValidationConfig{
+		MaxCommandLength: 1000,
+		AllowedCommands:  []string{"echo", "ls", "pwd", "cat", "grep"},
+	}
+
+	cv := NewCommandValidator(config)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		cv.Validate("echo hello world")
+	}
+}
+
+// Integration tests
+func TestSecurityManager_Integration(t *testing.T) {
+	config := SecurityConfig{
+		EnableAuth:       true,
+		EnableRateLimit:  true,
+		EnableInputFilter: true,
+		MaxCommandLength: 1000,
+		EnableAudit:      true,
+		RateLimitRPS:     10,
+		RateLimitBurst:   20,
+		AllowedCommands:  []string{"echo", "ls"},
+	}
+
+	logger := newMockLogger()
+	sm := NewSecurityManager(config, logger)
+
+	ctx := context.Background()
+	
+	// 1. Authenticate
+	auth, err := sm.Authenticate(ctx, "demo-token")
+	require.NoError(t, err)
+	require.NotNil(t, auth)
+
+	// 2. Validate permissions
+	err = sm.ValidatePermissions(ctx, auth, []string{"execute"})
+	assert.NoError(t, err)
+
+	// 3. Execute multiple commands (test rate limiting)
+	for i := 0; i < 25; i++ {
+		err := sm.ValidateCommand(ctx, "echo test", auth)
+		if i < 20 {
+			assert.NoError(t, err)
+		} else {
+			// Should be rate limited after burst
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "rate limit exceeded")
+		}
+	}
+
+	// 4. Test command validation
+	err = sm.ValidateCommand(ctx, "echo allowed command", auth)
+	assert.NoError(t, err)
+
+	err = sm.ValidateCommand(ctx, "rm forbidden command", auth)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "security validation failed")
+
+	// 5. Verify audit logs
+	assert.Greater(t, len(logger.logs), 0)
+}
