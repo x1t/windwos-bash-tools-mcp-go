@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -62,6 +65,7 @@ type BackgroundTask struct {
 	StartTime time.Time `json:"startTime"`
 	Error     string    `json:"error,omitempty"`
 	ExitCode  *int      `json:"exitCode,omitempty"`
+	TempFile  string    `json:"tempFile,omitempty"` // 临时文件路径用于存储输出
 }
 
 // MCPServer MCP服务器结构
@@ -176,7 +180,29 @@ func (s *MCPServer) BashOutputHandler(ctx context.Context, req *mcp.CallToolRequ
 		return nil, BashOutputToolOutput{}, fmt.Errorf("background task not found: %s", input.BashID)
 	}
 
+	// 从临时文件中读取最新的输出内容
 	output := task.Output
+	if task.TempFile != "" {
+		// 从临时文件中读取最新的输出
+		if content, err := os.ReadFile(task.TempFile); err == nil {
+			output = string(content)
+			// 更新内存中的输出，以便后续调用也能够获取到最新内容
+			// 先释放读锁，获取写锁
+			s.mutex.RUnlock()
+			s.mutex.Lock()
+			if existingTask, exists := s.backgroundTasks[input.BashID]; exists {
+				existingTask.Output = output
+			}
+			s.mutex.Unlock()
+			// 重新获取读锁
+			s.mutex.RLock()
+			// 重新获取task以确保我们使用的是最新的数据
+			if updatedTask, exists := s.backgroundTasks[input.BashID]; exists {
+				output = updatedTask.Output
+			}
+		}
+	}
+
 	if input.Filter != "" {
 		// 使用正则表达式过滤输出
 		regex, err := regexp.Compile(input.Filter)
@@ -257,33 +283,150 @@ func (s *MCPServer) executeBackgroundCommand(task *BackgroundTask, timeout int) 
 	if timeout <= 0 {
 		timeout = 30000 // 默认30秒
 	}
-	
+
+	// 创建临时文件来存储输出
+	tempFile, err := os.CreateTemp("", "bash_output_*.txt")
+	if err != nil {
+		s.mutex.Lock()
+		task.Status = "failed"
+		task.Error = fmt.Sprintf("Failed to create temp file: %v", err)
+		s.mutex.Unlock()
+		return
+	}
+	task.TempFile = tempFile.Name()
+	defer os.Remove(tempFile.Name()) // 确保临时文件被清理
+
 	// 创建带超时的context
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
 	defer cancel()
-	
-	// 使用BashExecutor而不是ShellExecutor，因为它有更好的超时处理
-	bashExecutor := executor.NewBashExecutor()
-	output, exitCode, err := bashExecutor.Execute(task.Command, timeout)
 
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	// 启动命令并实时写入临时文件
+	done := make(chan struct {
+		err error
+		exitCode int
+	}, 1)
+	go func() {
+		var cmd *exec.Cmd
+		if strings.Contains(strings.ToLower(task.Command), "powershell") {
+			cmd = exec.CommandContext(ctx, "powershell", "-Command", task.Command)
+		} else {
+			cmd = exec.CommandContext(ctx, "cmd", "/C", task.Command)
+		}
 
-	// 检查是否因为超时而失败
-	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			done <- struct {
+				err error
+				exitCode int
+			}{fmt.Errorf("failed to create stdout pipe: %w", err), 1}
+			return
+		}
+
+		stderr, err := cmd.StderrPipe()
+		if err != nil {
+			done <- struct {
+				err error
+				exitCode int
+			}{fmt.Errorf("failed to create stderr pipe: %w", err), 1}
+			return
+		}
+
+		if err := cmd.Start(); err != nil {
+			done <- struct {
+				err error
+				exitCode int
+			}{fmt.Errorf("failed to start command: %w", err), 1}
+			return
+		}
+
+		// 创建输出写入器
+		fileWriter := tempFile
+
+		// 读取stdout
+		go func() {
+			scanner := bufio.NewScanner(stdout)
+			for scanner.Scan() {
+				line := scanner.Text()
+				// 写入临时文件
+				fileWriter.WriteString(line + "\n")
+				fileWriter.Sync() // 确保内容被写入磁盘
+			}
+		}()
+
+		// 读取stderr
+		go func() {
+			scanner := bufio.NewScanner(stderr)
+			for scanner.Scan() {
+				line := scanner.Text()
+				// 写入临时文件
+				fileWriter.WriteString("ERROR: " + line + "\n")
+				fileWriter.Sync() // 确保内容被写入磁盘
+			}
+		}()
+
+		// 等待命令完成
+		err = cmd.Wait()
+		var finalExitCode int
+		if cmd.ProcessState != nil {
+			finalExitCode = cmd.ProcessState.ExitCode()
+		} else {
+			finalExitCode = -1
+		}
+		done <- struct {
+			err error
+			exitCode int
+		}{err, finalExitCode}
+	}()
+
+	// 等待命令完成或超时
+	select {
+	case result := <-done:
+		execErr := result.err
+		actualExitCode := result.exitCode
+		// 命令完成，关闭临时文件
+		tempFile.Close()
+		
+		// 读取完整的输出内容
+		outputContent, readErr := os.ReadFile(task.TempFile)
+		if readErr != nil {
+			s.mutex.Lock()
+			task.Status = "failed"
+			task.Error = fmt.Sprintf("Failed to read output file: %v", readErr)
+			exitCode := -1
+			task.ExitCode = &exitCode
+			s.mutex.Unlock()
+			return
+		}
+
+		s.mutex.Lock()
+		task.Output = string(outputContent)
+		if execErr != nil {
+			task.Status = "failed"
+			task.Error = execErr.Error()
+		} else {
+			task.Status = "completed"
+		}
+		task.ExitCode = &actualExitCode
+		s.mutex.Unlock()
+
+	case <-ctx.Done():
+		// 超时，强制终止进程
+		tempFile.Close()
+		
+		s.mutex.Lock()
 		task.Status = "failed"
 		task.Error = fmt.Sprintf("Command timed out after %dms", timeout)
-		task.Output = output // 即使超时也返回部分输出
+		exitCode := 1 // 超时通常表示失败
 		task.ExitCode = &exitCode
-	} else if err != nil {
-		task.Status = "failed"
-		task.Error = err.Error()
-		task.Output = output
-		task.ExitCode = &exitCode
-	} else {
-		task.Status = "completed"
-		task.Output = output
-		task.ExitCode = &exitCode
+		s.mutex.Unlock()
+		
+		// 读取已有的输出
+		outputContent, _ := os.ReadFile(task.TempFile)
+		s.mutex.Lock()
+		if len(outputContent) > 0 {
+			task.Output = string(outputContent)
+		}
+		s.mutex.Unlock()
 	}
 }
 
