@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -168,16 +169,17 @@ func (e *ShellExecutor) GetAvailableShells() []ShellType {
 
 // PrintShellInfo 打印Shell信息
 func (e *ShellExecutor) PrintShellInfo() {
-	fmt.Printf("🔧 检测到的Shell环境:\n")
+	// MCP协议要求stdout只用于JSON-RPC通信，调试信息输出到stderr
+	fmt.Fprintf(os.Stderr, "🔧 检测到的Shell环境:\n")
 	for i, shellType := range []ShellType{PowerShell7, GitBash, PowerShell, CMD} {
 		if path, exists := e.shellPaths[shellType]; exists {
 			status := "✅"
 			if shellType == e.preferredShell {
 				status = "🎯 (首选)"
 			}
-			fmt.Printf("%d. %s: %s %s\n", i+1, shellType.String(), path, status)
+			fmt.Fprintf(os.Stderr, "%d. %s: %s %s\n", i+1, shellType.String(), path, status)
 		} else {
-			fmt.Printf("%d. %s: ❌ 未找到\n", i+1, shellType.String())
+			fmt.Fprintf(os.Stderr, "%d. %s: ❌ 未找到\n", i+1, shellType.String())
 		}
 	}
 }

@@ -3,13 +3,10 @@ module mcp-bash-tools
 go 1.23.0
 
 require (
-	github.com/modelcontextprotocol/go-sdk v0.0.0
+	github.com/modelcontextprotocol/go-sdk v1.1.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.11.1
 )
-
-// 使用本地的MCP SDK
-replace github.com/modelcontextprotocol/go-sdk => ./go-sdk
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

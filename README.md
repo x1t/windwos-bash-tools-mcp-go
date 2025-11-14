@@ -62,10 +62,10 @@
 <div align="center">
 
 | 🎯 功能类别 | 🔢 数量 | 📊 覆盖率 | ⭐ 状态 |
-|-------------|---------|-----------|---------|
+|:-----------|:-------:|:---------:|:-------:|
 | 核心工具 | 3 | 100% | ✅ 稳定 |
 | 安全验证 | 6层 | 99% | ✅ 企业级 |
-| 测试覆盖 | 80%+ | 高 | ✅ 全面的 |
+| 测试覆盖 | 80%+ | 高 | ✅ 全面 |
 | 文档完整性 | 100% | 完整 | ✅ 详细 |
 
 </div>
@@ -74,9 +74,9 @@
 
 ### 🔰 核心功能
 
-<div style="display:flex; flex-wrap: wrap; gap: 10px;">
+<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
 
-<div style="flex:1; min-width: 250px; padding: 15px; border: 2px solid #0078D4; border-radius: 8px;">
+<div style="padding: 15px; border: 2px solid #0078D4; border-radius: 8px; background: linear-gradient(135deg, rgba(0,120,212,0.05), rgba(0,120,212,0.02));">
 
 **🛡️ 安全命令执行**
 - 多层安全验证
@@ -86,7 +86,7 @@
 
 </div>
 
-<div style="flex:1; min-width: 250px; padding: 15px; border: 2px solid #00ADD8; border-radius: 8px;">
+<div style="padding: 15px; border: 2px solid #00ADD8; border-radius: 8px; background: linear-gradient(135deg, rgba(0,173,216,0.05), rgba(0,173,216,0.02));">
 
 **⚡ 前台/后台模式**
 - 同步执行：立即返回结果
@@ -96,17 +96,16 @@
 
 </div>
 
-<div style="flex:1; min-width: 250px; padding: 15px; border: 2px solid #5391FE; border-radius: 8px;">
+<div style="padding: 15px; border: 2px solid #5391FE; border-radius: 8px; background: linear-gradient(135deg, rgba(83,145,254,0.05), rgba(83,145,254,0.02));">
 
 **🎯 智能超时控制**
-- 范围：1-600秒
-- 默认：30秒
-- 可配置
-- 自动终止
+- 范围：1-600秒 | 默认：30秒
+- 自动终止超时任务
+- 可配置超时策略
 
 </div>
 
-<div style="flex:1; min-width: 250px; padding: 15px; border: 2px solid #10B981; border-radius: 8px;">
+<div style="padding: 15px; border: 2px solid #10B981; border-radius: 8px; background: linear-gradient(135deg, rgba(16,185,129,0.05), rgba(16,185,129,0.02));">
 
 **📊 实时输出监控**
 - 临时文件存储
@@ -116,13 +115,12 @@
 
 </div>
 
-<div style="flex:1; min-width: 250px; padding: 15px; border: 2px solid #F59E0B; border-radius: 8px;">
+<div style="padding: 15px; border: 2px solid #F59E0B; border-radius: 8px; background: linear-gradient(135deg, rgba(245,158,11,0.05), rgba(245,158,11,0.02));">
 
 **🔧 多Shell支持**
-- PowerShell 7 (首选)
-- Git Bash
-- PowerShell 5+
-- CMD (兼容)
+- PowerShell 7 (首选) | Git Bash
+- PowerShell 5+ | CMD (兼容)
+- 智能Shell检测
 
 </div>
 
@@ -132,65 +130,53 @@
 
 ### 🏢 企业级特性
 
-<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px;">
+<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 15px;">
 
 <div style="padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;">
 
 **🔐 权限控制**
-- JWT认证机制
-- 基于角色的访问控制（RBAC）
-- Token权限验证
-- 会话管理
+- JWT认证机制 | RBAC权限控制
+- Token权限验证 | 会话管理
 
 </div>
 
 <div style="padding: 20px; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); border-radius: 10px; color: white;">
 
 **📝 审计日志**
-- 结构化日志记录
-- 安全事件追踪
-- 操作审计追踪
-- 异常行为检测
+- 结构化日志记录 | 安全事件追踪
+- 操作审计追踪 | 异常行为检测
 
 </div>
 
 <div style="padding: 20px; background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); border-radius: 10px; color: white;">
 
 **🚫 危险命令过滤**
-- 70+种危险模式
-- 正则表达式检测
-- 实时威胁识别
-- 自动拦截
+- 70+种危险模式 | 正则表达式检测
+- 实时威胁识别 | 自动拦截
 
 </div>
 
 <div style="padding: 20px; background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); border-radius: 10px; color: white;">
 
 **⚖️ 资源限制**
-- CPU: 最大80%
-- 内存: 最大512MB
-- 输出: 最大10MB
-- 进程: 最大10个
+- CPU: 80% | 内存: 512MB
+- 输出: 10MB | 进程: 10个
 
 </div>
 
 <div style="padding: 20px; background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); border-radius: 10px; color: white;">
 
 **🔄 任务管理**
-- 最大50个并发任务
-- sync.RWMutex保证安全
-- 任务状态追踪
-- 自动资源清理
+- 50个并发任务 | sync.RWMutex保证安全
+- 任务状态追踪 | 自动资源清理
 
 </div>
 
 <div style="padding: 20px; background: linear-gradient(135deg, #30cfd0 0%, #330867 100%); border-radius: 10px; color: white;">
 
 **🏗️ 沙箱隔离**
-- 可选沙箱执行环境
-- 工作目录隔离
-- 资源配额限制
-- 网络访问控制
+- 可选沙箱执行环境 | 工作目录隔离
+- 资源配额限制 | 网络访问控制
 
 </div>
 
@@ -200,53 +186,45 @@
 
 ### 🎨 开发者友好
 
-<div style="display:flex; justify-content: space-around; flex-wrap: wrap; gap: 20px;">
+<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px;">
 
-<div style="text-align: center; padding: 15px;">
+<div style="text-align: center; padding: 20px; border: 2px solid #10B981; border-radius: 10px; background: linear-gradient(135deg, rgba(16,185,129,0.05), rgba(16,185,129,0.02));">
 
 ![📁](https://img.shields.io/badge/Project%20Structure-Clear-brightgreen?style=for-the-badge)
 
 **📁 清晰的项目结构**
-- 遵循Go最佳实践
-- 模块化设计
-- 清晰的代码组织
-- 易于维护和扩展
+- 遵循Go最佳实践 | 模块化设计
+- 清晰的代码组织 | 易于维护和扩展
 
 </div>
 
-<div style="text-align: center; padding: 15px;">
+<div style="text-align: center; padding: 20px; border: 2px solid #F59E0B; border-radius: 10px; background: linear-gradient(135deg, rgba(245,158,11,0.05), rgba(245,158,11,0.02));">
 
 ![🧪](https://img.shields.io/badge/Test%20Coverage-80%25-yellow?style=for-the-badge)
 
 **🧪 完整的测试覆盖**
-- 单元测试 (70%)
-- 集成测试 (20%)
-- 端到端测试 (10%)
-- 性能基准测试
+- 单元测试 (70%) | 集成测试 (20%)
+- 端到端测试 (10%) | 性能基准测试
 
 </div>
 
-<div style="text-align: center; padding: 15px;">
+<div style="text-align: center; padding: 20px; border: 2px solid #3B82F6; border-radius: 10px; background: linear-gradient(135deg, rgba(59,130,246,0.05), rgba(59,130,246,0.02));">
 
 ![📚](https://img.shields.io/badge/Documentation-Complete-blue?style=for-the-badge)
 
 **📚 详细的文档**
-- API文档完整
-- 示例代码丰富
-- 最佳实践指南
-- 故障排除手册
+- API文档完整 | 示例代码丰富
+- 最佳实践指南 | 故障排除手册
 
 </div>
 
-<div style="text-align: center; padding: 15px;">
+<div style="text-align: center; padding: 20px; border: 2px solid #8B5CF6; border-radius: 10px; background: linear-gradient(135deg, rgba(139,92,246,0.05), rgba(139,92,246,0.02));">
 
 ![🔧](https://img.shields.io/badge/Tools-Rich-orange?style=for-the-badge)
 
 **🔧 丰富的工具**
-- PowerShell构建脚本
-- 代码质量检查
-- 自动化测试
-- 持续集成支持
+- PowerShell构建脚本 | 代码质量检查
+- 自动化测试 | 持续集成支持
 
 </div>
 
@@ -270,36 +248,36 @@
 
 ### 📋 1️⃣ 环境检查清单
 
-<table style="width: 100%; border-collapse: collapse;">
-<tr style="background-color: #f8f9fa;">
-<th style="padding: 15px; text-align: left; border: 1px solid #dee2e6;">✅ 要求</th>
-<th style="padding: 15px; text-align: left; border: 1px solid #dee2e6;">📦 最低版本</th>
-<th style="padding: 15px; text-align: left; border: 1px solid #dee2e6;">🔍 验证命令</th>
-<th style="padding: 15px; text-align: center; border: 1px solid #dee2e6;">✅ 状态</th>
+<table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+<tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+<th style="padding: 12px; text-align: left; border: 1px solid #dee2e6;">✅ 要求</th>
+<th style="padding: 12px; text-align: left; border: 1px solid #dee2e6;">📦 版本</th>
+<th style="padding: 12px; text-align: left; border: 1px solid #dee2e6;">🔍 验证命令</th>
+<th style="padding: 12px; text-align: center; border: 1px solid #dee2e6;">✅ 状态</th>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #dee2e6;">🖥️ 操作系统</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">Windows 10/11 (x64)</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;"><code>systeminfo | findstr /B /C:"OS Name"</code></td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">📋</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">🖥️ 操作系统</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">Windows 10/11 x64</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;"><code>systeminfo | findstr /B /C:"OS Name"</code></td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">📋</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #dee2e6;">🔷 Go语言</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">Go 1.23.0+</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;"><code>go version</code></td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">✅</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">🔷 Go语言</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">Go 1.23.0+</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;"><code>go version</code></td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">✅</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #dee2e6;">⚡ PowerShell</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">PowerShell 7.0+</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;"><code>$PSVersionTable.PSVersion</code></td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">✅</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">⚡ PowerShell</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">PowerShell 7.0+</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;"><code>$PSVersionTable.PSVersion</code></td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">✅</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #dee2e6;">📁 Git</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">Git 2.0+</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;"><code>git --version</code></td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">✅</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">📁 Git</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">Git 2.0+</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;"><code>git --version</code></td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">✅</td>
 </tr>
 </table>
 
@@ -332,7 +310,7 @@ Get-ChildItem -Recurse -Depth 2 | Select-Object Name, PSIsContainer
 
 ### 🔨 3️⃣ 构建项目
 
-<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0;">
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
 
 <div style="padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white; text-align: center;">
 <strong>🐛 调试模式</strong><br>
@@ -796,40 +774,40 @@ sequenceDiagram
 
 <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
 <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
-<th style="padding: 15px; text-align: left; border: 1px solid #dee2e6;">⚡ 指标</th>
-<th style="padding: 15px; text-align: left; border: 1px solid #dee2e6;">📊 数值</th>
-<th style="padding: 15px; text-align: left; border: 1px solid #dee2e6;">🎯 目标</th>
-<th style="padding: 15px; text-align: center; border: 1px solid #dee2e6;">✅ 状态</th>
+<th style="padding: 12px; text-align: left; border: 1px solid #dee2e6;">⚡ 指标</th>
+<th style="padding: 12px; text-align: left; border: 1px solid #dee2e6;">📊 数值</th>
+<th style="padding: 12px; text-align: left; border: 1px solid #dee2e6;">🎯 目标</th>
+<th style="padding: 12px; text-align: center; border: 1px solid #dee2e6;">✅ 状态</th>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #dee2e6;">命令启动延迟</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">< 100ms</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">< 200ms</td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">🏆</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">命令启动延迟</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">< 100ms</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">< 200ms</td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">🏆</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #dee2e6;">并发任务数</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">50 (可配置)</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">100</td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">📈</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">并发任务数</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">50 (可配置)</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">100</td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">📈</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #dee2e6;">内存使用</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">< 512MB</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">< 1GB</td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">🏆</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">内存使用</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">< 512MB</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">< 1GB</td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">🏆</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #dee2e6;">CPU使用率</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">< 80%</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">< 90%</td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">🏆</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">CPU使用率</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">< 80%</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">< 90%</td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">🏆</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #dee2e6;">输出延迟</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">< 50ms</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">< 100ms</td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">🏆</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">输出延迟</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">< 50ms</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">< 100ms</td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">🏆</td>
 </tr>
 </table>
 
@@ -2104,34 +2082,34 @@ go test -v ./internal/windows
 
 <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
 <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
-<th style="padding: 15px; text-align: left; border: 1px solid #dee2e6;">📦 模块</th>
-<th style="padding: 15px; text-align: center; border: 1px solid #dee2e6;">🎯 目标覆盖率</th>
-<th style="padding: 15px; text-align: left; border: 1px solid #dee2e6;">📋 测试重点</th>
+<th style="padding: 12px; text-align: left; border: 1px solid #dee2e6;">📦 模块</th>
+<th style="padding: 12px; text-align: center; border: 1px solid #dee2e6;">🎯 覆盖率</th>
+<th style="padding: 12px; text-align: left; border: 1px solid #dee2e6;">📋 测试重点</th>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #dee2e6;"><strong>security模块</strong></td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">100%</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">危险命令检测、认证授权、限流</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;"><strong>security模块</strong></td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">100%</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">危险命令检测、认证授权、限流</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #dee2e6;"><strong>executor模块</strong></td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">90%+</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">命令执行、超时控制、前台后台</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;"><strong>executor模块</strong></td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">90%+</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">命令执行、超时控制、前台后台</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #dee2e6;"><strong>windows模块</strong></td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">85%+</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">平台优化、编码设置</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;"><strong>windows模块</strong></td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">85%+</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">平台优化、编码设置</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #dee2e6;"><strong>server主程序</strong></td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">80%+</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">MCP工具集成、任务管理</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;"><strong>server主程序</strong></td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">80%+</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">MCP工具集成、任务管理</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #dee2e6;"><strong>整体覆盖率</strong></td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center; font-size: 18px;"><strong>85%+</strong></td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">所有模块综合</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;"><strong>整体覆盖率</strong></td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center; font-size: 18px;"><strong>85%+</strong></td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">所有模块综合</td>
 </tr>
 </table>
 
@@ -2196,46 +2174,6 @@ Get-Process | Where-Object {$_.ProcessName -like "*bash-tools*"}
 1. 查看 [CLAUDE.md](CLAUDE.md) 获取详细的开发指南
 2. 检查 [Issues](https://github.com/your-org/mcp-bash-tools/issues) 查看已知问题
 3. 创建新的Issue报告问题
-
----
-
-## 🤝 贡献指南
-
-我们欢迎社区贡献！请遵循以下步骤：
-
-### 开发流程
-
-1. **Fork 项目**
-2. **创建功能分支** (`git checkout -b feature/amazing-feature`)
-3. **提交更改** (`git commit -m 'Add amazing feature'`)
-4. **推送到分支** (`git push origin feature/amazing-feature`)
-5. **创建 Pull Request**
-
-### 代码规范
-
-- 遵循 Go 官方代码规范
-- 使用 `go fmt` 格式化代码
-- 使用 `go vet` 进行静态分析
-- 添加适当的测试用例
-- 更新相关文档
-
-### 提交规范
-
-使用 [Conventional Commits](https://www.conventionalcommits.org/) 规范：
-
-```
-feat: 添加新功能
-fix: 修复bug
-docs: 更新文档
-style: 代码格式调整
-refactor: 代码重构
-test: 添加测试
-chore: 构建或辅助工具变动
-```
-
-### 安全贡献
-
-如果您发现安全漏洞，请勿公开报告。请发送邮件至：security@your-org.com
 
 ---
 
@@ -2773,29 +2711,29 @@ SOFTWARE.
 
 <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
 <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
-<th style="padding: 15px; text-align: left; border: 1px solid #dee2e6;">📬 联系类型</th>
-<th style="padding: 15px; text-align: center; border: 1px solid #dee2e6;">⏱️ 响应时间</th>
-<th style="padding: 15px; text-align: left; border: 1px solid #dee2e6;">📋 说明</th>
+<th style="padding: 12px; text-align: left; border: 1px solid #dee2e6;">📬 联系类型</th>
+<th style="padding: 12px; text-align: center; border: 1px solid #dee2e6;">⏱️ 响应时间</th>
+<th style="padding: 12px; text-align: left; border: 1px solid #dee2e6;">📋 说明</th>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #dee2e6;">Bug报告</td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">24-48小时</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">工作日内回复</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">Bug报告</td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">24-48小时</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">工作日内回复</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #dee2e6;">功能请求</td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">3-5天</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">需要评审和讨论</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">功能请求</td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">3-5天</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">需要评审和讨论</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #dee2e6;">安全问题</td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">24小时内</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">优先处理</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">安全问题</td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">24小时内</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">优先处理</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #dee2e6;">一般咨询</td>
-<td style="padding: 15px; border: 1px solid #dee2e6; text-align: center;">1-3天</td>
-<td style="padding: 15px; border: 1px solid #dee2e6;">感谢您的耐心</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">一般咨询</td>
+<td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">1-3天</td>
+<td style="padding: 12px; border: 1px solid #dee2e6;">感谢您的耐心</td>
 </tr>
 </table>
 

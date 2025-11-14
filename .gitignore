@@ -10,6 +10,8 @@
 *.exe
 *.exe~
 /dist/
+/go-sdk/
+/file-bash-tools-windows/
 build/
 bin/
 
