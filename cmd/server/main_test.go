@@ -38,6 +38,7 @@ func (suite *BashHandlerTestSuite) TestBashHandler_EmptyCommand() {
 	// 准备测试数据
 	args := BashArguments{
 		Command: "",
+		Timeout: 5000,
 	}
 
 	// 执行测试 - 根据官方MCP标准，工具错误返回nil + 结构化输出

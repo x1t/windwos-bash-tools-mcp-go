@@ -24,7 +24,7 @@ func NewShellExecutor() ShellExecutorInterface {
 // BashArguments 定义Bash工具的输入参数 - 使用官方标准命名
 type BashArguments struct {
 	Command         string `json:"command" jsonschema:"要执行的PowerShell/CMD命令"`
-	Timeout         int    `json:"timeout,omitempty" jsonschema:"命令超时时间(毫秒),默认30000,范围1000-600000"`
+	Timeout         int    `json:"timeout" jsonschema:"命令超时时间(毫秒),必填,范围1000-600000"`
 	Description     string `json:"description,omitempty" jsonschema:"命令描述,用于日志记录"`
 	RunInBackground bool   `json:"run_in_background,omitempty" jsonschema:"是否在后台执行命令"`
 }
@@ -111,7 +111,21 @@ func (s *MCPServer) BashHandler(ctx context.Context, req *mcp.CallToolRequest, a
 		}, nil
 	}
 
-	if args.Timeout != 0 && (args.Timeout < 1000 || args.Timeout > 600000) {
+	if args.Timeout == 0 {
+			// 返回详细的错误信息
+			errorMsg := "timeout参数是必需的，必须在1000到600000毫秒之间"
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: errorMsg},
+				},
+				IsError: true,
+			}, BashResult{
+				ExitCode: 1,
+				Output:   errorMsg,
+			}, nil
+		}
+
+		if args.Timeout < 1000 || args.Timeout > 600000 {
 		errorMsg := fmt.Sprintf("timeout必须在1000到600000毫秒之间，当前值: %d", args.Timeout)
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
@@ -556,7 +570,7 @@ func AddBashTools(server *mcp.Server) {
 	// 注册Bash工具 - 使用官方推荐的AddTool模式
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "bash",
-		Description: "安全执行PowerShell/CMD命令，支持前台和后台执行模式\n\n主要功能：\n• 支持PowerShell 7+和Windows CMD命令执行\n• 智能Shell环境检测，自动选择最佳Shell\n• 支持前台执行（同步等待结果）和后台执行（异步任务）\n• 可配置超时时间（1-600秒，默认30秒）\n• 企业级安全验证（危险命令过滤、长度限制）\n• 完整错误处理和退出代码返回\n\n参数说明：\n• command（必填）：要执行的PowerShell/CMD命令\n• timeout（可选）：超时时间（毫秒），范围1000-600000\n• description（可选）：命令描述，用于日志记录\n• run_in_background（可选）：是否后台执行，默认false\n\n返回结果：\n• output：命令执行输出内容\n• exitCode：命令退出代码\n• killed：是否被强制终止\n• shellId：后台任务ID（仅后台执行时返回）\n\n安全限制：\n• 最大命令长度10000字符\n• 禁止危险命令（删除、格式化、关机等）\n• 自动检测和过滤恶意操作",
+		Description: "安全执行PowerShell/CMD命令，支持前台和后台执行模式\n\n主要功能：\n• 支持PowerShell 7+和Windows CMD命令执行\n• 智能Shell环境检测，自动选择最佳Shell\n• 支持前台执行（同步等待结果）和后台执行（异步任务）\n• 必填超时时间（1-600秒）防止无限等待\n• 企业级安全验证（危险命令过滤、长度限制）\n• 完整错误处理和退出代码返回\n\n参数说明：\n• command（必填）：要执行的PowerShell/CMD命令\n• timeout（必填）：超时时间（毫秒），范围1000-600000\n• description（可选）：命令描述，用于日志记录\n• run_in_background（可选）：是否后台执行，默认false\n\n返回结果：\n• output：命令执行输出内容\n• exitCode：命令退出代码\n• killed：是否被强制终止\n• shellId：后台任务ID（仅后台执行时返回）\n\n安全限制：\n• 最大命令长度10000字符\n• 禁止危险命令（删除、格式化、关机等）\n• 自动检测和过滤恶意操作\n• timeout参数为必填项，确保命令执行时间可控",
 	}, bashServer.BashHandler)
 
 	// 注册BashOutput工具
