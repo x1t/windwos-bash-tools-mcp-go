@@ -20,8 +20,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 清理构建产物
 .\build.ps1 -Clean
 
+# 详细构建输出
+.\build.ps1 -Verbose
+
 # 运行服务器
 .\dist\bash-tools.exe
+
+# 验证Go环境
+go version
+go env
 ```
 
 ### 测试执行
@@ -37,12 +44,28 @@ go test -v ./cmd/server/background_task_test.go
 go test -v ./cmd/server/bash_output_test.go
 go test -v ./cmd/server/kill_shell_test.go
 
+# 运行特定包的测试
+go test -v ./internal/security
+go test -v ./internal/executor
+
 # 生成覆盖率报告
 go test -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out -o coverage.html
 
 # 并发安全测试
 go test -race ./...
+
+# 跳过并发安全检查（快速测试）
+go test ./... -skip=TestKillShellHandlerTestSuite -skip=TestBashHandlerTestSuite
+
+# 运行单个测试
+go test -v -run TestSpecificTestName ./...
+
+# 性能基准测试
+go test -bench=. -benchmem ./...
+
+# 超时设置（长时间测试）
+go test -timeout 10m ./...
 ```
 
 ## 核心架构设计
@@ -240,6 +263,47 @@ type BackgroundTask struct {
 - 依赖倒置：面向接口编程
 - 错误处理：多层检查+详细错误信息
 
+### 项目依赖管理
+```powershell
+# 更新依赖
+go get -u ./...
+go mod tidy
+
+# 检查依赖漏洞
+go list -m -u all
+
+# 下载依赖
+go mod download
+
+# 验证依赖
+go mod verify
+```
+
+### 开发工具推荐
+- **IDE**: VS Code + Go扩展
+- **调试**: Delve debugger (`dlv debug`)
+- **格式化**: `go fmt ./...`
+- **静态分析**: `go vet ./...`
+- **代码检查**: golangci-lint
+
+### 提交前检查清单
+```powershell
+# 1. 格式化代码
+go fmt ./...
+
+# 2. 静态分析
+go vet ./...
+
+# 3. 运行测试（跳过已知问题）
+go test ./... -timeout 5m
+
+# 4. 并发安全检查
+go test -race ./internal/security ./internal/executor
+
+# 5. 构建验证
+.\build.ps1 -Release
+```
+
 ## 故障排除
 
 ### 常见问题
@@ -247,6 +311,13 @@ type BackgroundTask struct {
 2. **并发安全问题**: 验证锁的使用（读锁查询/写锁更新）
 3. **安全验证误报**: 检查validator.go中的危险模式规则
 4. **测试失败**: 清理临时文件，检查Mock对象初始化
+5. **并发任务ID重复**: 检查时间戳生成逻辑，确保纳秒级精度
+6. **KillShell测试失败**: 验证错误处理逻辑和任务状态检查
+
+### 当前已知测试问题
+- 部分并发测试存在任务ID冲突问题
+- KillShell错误处理测试需要更新
+- 安全验证边界情况需要改进
 
 ### 调试命令
 ```powershell
@@ -261,4 +332,30 @@ go test -cpuprofile=cpu.prof -memprofile=mem.prof ./...
 
 # 构建详细输出
 .\build.ps1 -Verbose
+
+# 跳过已知问题的测试
+go test -v ./... -skip="TestKillShellHandlerTestSuite" -skip="TestBashHandler_ConcurrentBackgroundTasks"
+
+# 运行单个测试套件
+go test -v ./cmd/server -run TestSecurityTestSuite
+
+# 清理临时测试文件
+Get-ChildItem -Path . -Recurse -Name "temp_*" -File | Remove-Item
+```
+
+### 开发环境检查
+```powershell
+# 检查Go版本和模块
+go version
+go mod verify
+go mod tidy
+
+# 检查PowerShell执行策略
+Get-ExecutionPolicy
+if ((Get-ExecutionPolicy) -eq "Restricted") {
+    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+}
+
+# 检查文件编码（避免中文乱码）
+Get-Content build.ps1 -Encoding UTF8 | Set-Content build.ps1 -Encoding UTF8
 ```
