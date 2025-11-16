@@ -237,15 +237,10 @@ func (s *MCPServer) BashOutputHandler(ctx context.Context, req *mcp.CallToolRequ
 
 	if len(args.BashID) > 100 {
 		errorMsg := fmt.Sprintf("bash_id过长(最大100字符)，当前长度: %d", len(args.BashID))
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{Text: errorMsg},
-			},
-			IsError: true,
-		}, BashOutputResult{
+		return nil, BashOutputResult{
 			Status: "failed",
 			Output: errorMsg,
-		}, nil
+		}, fmt.Errorf("bash_id过长(最大100字符)，当前长度: %d", len(args.BashID))
 	}
 
 	s.mutex.RLock()
@@ -254,15 +249,10 @@ func (s *MCPServer) BashOutputHandler(ctx context.Context, req *mcp.CallToolRequ
 	task, exists := s.backgroundTasks[args.BashID]
 	if !exists {
 		errorMsg := fmt.Sprintf("未找到后台任务: %s", args.BashID)
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{Text: errorMsg},
-			},
-			IsError: true,
-		}, BashOutputResult{
+		return nil, BashOutputResult{
 			Status: "not_found",
 			Output: errorMsg,
-		}, nil
+		}, fmt.Errorf("未找到后台任务: %s", args.BashID)
 	}
 
 	// 从临时文件中读取最新的输出内容
@@ -272,19 +262,9 @@ func (s *MCPServer) BashOutputHandler(ctx context.Context, req *mcp.CallToolRequ
 		if content, err := os.ReadFile(task.TempFile); err == nil {
 			output = string(content)
 			// 更新内存中的输出，以便后续调用也能够获取到最新内容
-			// 先释放读锁，获取写锁
-			s.mutex.RUnlock()
-			s.mutex.Lock()
-			if existingTask, exists := s.backgroundTasks[args.BashID]; exists {
-				existingTask.Output = output
-			}
-			s.mutex.Unlock()
-			// 重新获取读锁
-			s.mutex.RLock()
-			// 重新获取task以确保我们使用的是最新的数据
-			if updatedTask, exists := s.backgroundTasks[args.BashID]; exists {
-				output = updatedTask.Output
-			}
+			// 使用原子操作或简化锁策略避免复杂的锁升级降级
+			// 这里我们选择不立即更新内存，因为临时文件已经包含最新内容
+			// 如果需要更新内存，可以在任务完成时统一更新
 		}
 	}
 
@@ -293,15 +273,10 @@ func (s *MCPServer) BashOutputHandler(ctx context.Context, req *mcp.CallToolRequ
 		regex, err := regexp.Compile(args.Filter)
 		if err != nil {
 			errorMsg := fmt.Sprintf("无效的正则表达式过滤模式 '%s': %v", args.Filter, err)
-			return &mcp.CallToolResult{
-				Content: []mcp.Content{
-					&mcp.TextContent{Text: errorMsg},
-				},
-				IsError: true,
-			}, BashOutputResult{
+			return nil, BashOutputResult{
 				Status: "failed",
 				Output: errorMsg,
-			}, nil
+			}, fmt.Errorf("无效的过滤模式 '%s': %v", args.Filter, err)
 		}
 
 		lines := strings.Split(output, "\n")
@@ -378,6 +353,11 @@ func (s *MCPServer) KillShellHandler(ctx context.Context, req *mcp.CallToolReque
 		task.Error = "Task killed by user request"
 	}
 
+	// 清理临时文件
+	if task.TempFile != "" {
+		os.Remove(task.TempFile)
+	}
+
 	// 从后台任务列表中移除
 	delete(s.backgroundTasks, args.ShellID)
 
@@ -407,17 +387,24 @@ func (s *MCPServer) executeBackgroundCommand(task *BackgroundTask, timeout int) 
 		return
 	}
 	task.TempFile = tempFile.Name()
-	defer os.Remove(tempFile.Name()) // 确保临时文件被清理
+	// 注意：临时文件清理在任务完成后由KillShellHandler或TearDownSuite处理
 
 	// 创建带超时的context
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
 	defer cancel()
 
+	// 使用同步机制保护文件写入
+	var writeMutex sync.Mutex
+	
 	// 启动命令并实时写入临时文件
 	done := make(chan struct {
 		err error
 		exitCode int
 	}, 1)
+	
+	// 使用WaitGroup等待所有goroutine完成
+	var wg sync.WaitGroup
+	
 	go func() {
 		var cmd *exec.Cmd
 		if strings.Contains(strings.ToLower(task.Command), "powershell") {
@@ -452,28 +439,39 @@ func (s *MCPServer) executeBackgroundCommand(task *BackgroundTask, timeout int) 
 			return
 		}
 
-		// 创建输出写入器
-		fileWriter := tempFile
-
 		// 读取stdout
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			scanner := bufio.NewScanner(stdout)
 			for scanner.Scan() {
 				line := scanner.Text()
-				// 写入临时文件
-				fileWriter.WriteString(line + "\n")
-				fileWriter.Sync() // 确保内容被写入磁盘
+				// 使用互斥锁保护文件写入
+				writeMutex.Lock()
+				if _, err := tempFile.WriteString(line + "\n"); err != nil {
+					// 记录写入错误但继续执行
+					fmt.Fprintf(os.Stderr, "Failed to write to temp file: %v\n", err)
+				}
+				tempFile.Sync() // 确保内容被写入磁盘
+				writeMutex.Unlock()
 			}
 		}()
 
 		// 读取stderr
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			scanner := bufio.NewScanner(stderr)
 			for scanner.Scan() {
 				line := scanner.Text()
-				// 写入临时文件
-				fileWriter.WriteString("ERROR: " + line + "\n")
-				fileWriter.Sync() // 确保内容被写入磁盘
+				// 使用互斥锁保护文件写入
+				writeMutex.Lock()
+				if _, err := tempFile.WriteString("ERROR: " + line + "\n"); err != nil {
+					// 记录写入错误但继续执行
+					fmt.Fprintf(os.Stderr, "Failed to write to temp file: %v\n", err)
+				}
+				tempFile.Sync() // 确保内容被写入磁盘
+				writeMutex.Unlock()
 			}
 		}()
 
@@ -485,6 +483,10 @@ func (s *MCPServer) executeBackgroundCommand(task *BackgroundTask, timeout int) 
 		} else {
 			finalExitCode = -1
 		}
+		
+		// 等待所有输出goroutine完成
+		wg.Wait()
+		
 		done <- struct {
 			err error
 			exitCode int
@@ -524,6 +526,8 @@ func (s *MCPServer) executeBackgroundCommand(task *BackgroundTask, timeout int) 
 
 	case <-ctx.Done():
 		// 超时，强制终止进程
+		// 等待所有输出goroutine完成后再关闭文件
+		wg.Wait()
 		tempFile.Close()
 		
 		s.mutex.Lock()
@@ -531,11 +535,9 @@ func (s *MCPServer) executeBackgroundCommand(task *BackgroundTask, timeout int) 
 		task.Error = fmt.Sprintf("Command timed out after %dms", timeout)
 		exitCode := 1 // 超时通常表示失败
 		task.ExitCode = &exitCode
-		s.mutex.Unlock()
 		
 		// 读取已有的输出
 		outputContent, _ := os.ReadFile(task.TempFile)
-		s.mutex.Lock()
 		if len(outputContent) > 0 {
 			task.Output = string(outputContent)
 		}

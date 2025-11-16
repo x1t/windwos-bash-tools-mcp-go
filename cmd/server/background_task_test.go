@@ -201,26 +201,7 @@ func (suite *BackgroundTaskManagerTestSuite) TestConcurrentTaskAccess() {
 
 	var wg sync.WaitGroup
 	
-	// 并发读取任务
-	for i := 0; i < numTasks; i++ {
-		wg.Add(1)
-		go func(index int) {
-			defer wg.Done()
-			
-			taskID := taskIDs[index]
-			
-			// 模拟BashOutputHandler的读取操作
-			suite.server.mutex.RLock()
-			task, exists := suite.server.backgroundTasks[taskID]
-			suite.server.mutex.RUnlock()
-			
-			assert.True(suite.T(), exists, "任务应该存在: %s", taskID)
-			assert.Equal(suite.T(), "Initial output "+string(rune('0'+index)), task.Output)
-			assert.Equal(suite.T(), "running", task.Status)
-		}(i)
-	}
-	
-	// 并发更新任务
+	// 先并发更新任务
 	for i := 0; i < numTasks; i++ {
 		wg.Add(1)
 		go func(index int) {
@@ -237,6 +218,31 @@ func (suite *BackgroundTaskManagerTestSuite) TestConcurrentTaskAccess() {
 				task.ExitCode = &exitCode
 			}
 			suite.server.mutex.Unlock()
+		}(i)
+	}
+	
+	// 等待所有更新完成后再读取
+	wg.Wait()
+	
+	// 重置WaitGroup用于读取测试
+	wg = sync.WaitGroup{}
+	
+	// 并发读取任务（现在应该读取到更新后的状态）
+	for i := 0; i < numTasks; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			
+			taskID := taskIDs[index]
+			
+			// 模拟BashOutputHandler的读取操作
+			suite.server.mutex.RLock()
+			task, exists := suite.server.backgroundTasks[taskID]
+			suite.server.mutex.RUnlock()
+			
+			assert.True(suite.T(), exists, "任务应该存在: %s", taskID)
+			assert.Equal(suite.T(), "Updated output "+string(rune('0'+index)), task.Output)
+			assert.Equal(suite.T(), "completed", task.Status)
 		}(i)
 	}
 
