@@ -1,5 +1,28 @@
 package security
 
+/*
+	⚠️ 注意: 此文件包含企业级安全管理器的预留实现
+
+	当前状态: 未启用
+	- 本项目当前仅使用 validator.go 中的基础命令验证
+	- SecurityManager 提供了高级安全特性（JWT认证、RBAC、速率限制等）
+	- 这些功能已实现但未集成到主服务器中
+
+	如需启用:
+	1. 在 cmd/server/main.go 中初始化 SecurityManager
+	2. 在 BashHandler 中添加认证和授权检查
+	3. 配置相应的安全策略和速率限制
+
+	功能特性:
+	- JWT令牌认证
+	- RBAC权限控制
+	- Token Bucket速率限制
+	- 审计日志记录
+	- 会话管理
+
+	注意: 对于本地MCP工具，这些功能可能过度设计
+*/
+
 import (
 	"context"
 	"crypto/rand"
@@ -13,6 +36,16 @@ import (
 	"mcp-bash-tools/pkg/logger"
 )
 
+// contextKey 自定义 context key 类型，避免键冲突
+type contextKey string
+
+// 定义 context keys
+const (
+	authContextKey      contextKey = "auth"
+	securityEnabledKey  contextKey = "security_enabled"
+	rateLimitEnabledKey contextKey = "rate_limit_enabled"
+)
+
 // Enterprise-grade security manager
 type SecurityManager struct {
 	logger           *logger.Logger
@@ -20,24 +53,24 @@ type SecurityManager struct {
 	rateLimiter      *RateLimiter
 	commandValidator *CommandValidator
 	authProvider     AuthProvider
-	mutex           sync.RWMutex
+	mutex            sync.RWMutex
 }
 
 // SecurityConfig holds security configuration
 type SecurityConfig struct {
 	EnableAuth         bool          `json:"enable_auth" default:"true"`
-	APIKeys           []string      `json:"api_keys"`
-	TokenExpiry       time.Duration `json:"token_expiry" default:"24h"`
-	EnableRateLimit   bool          `json:"enable_rate_limit" default:"true"`
-	RateLimitRPS      int           `json:"rate_limit_rps" default:"10"`
-	RateLimitBurst    int           `json:"rate_limit_burst" default:"20"`
-	EnableInputFilter bool          `json:"enable_input_filter" default:"true"`
-	MaxCommandLength  int           `json:"max_command_length" default:"1000"`
-	EnableAudit       bool          `json:"enable_audit" default:"true"`
-	AllowedCommands   []string      `json:"allowed_commands"`
-	BlockedCommands   []string      `json:"blocked_commands"`
-	WorkingDirRestrict bool         `json:"working_dir_restrict" default:"true"`
-	AllowedPaths      []string      `json:"allowed_paths"`
+	APIKeys            []string      `json:"api_keys"`
+	TokenExpiry        time.Duration `json:"token_expiry" default:"24h"`
+	EnableRateLimit    bool          `json:"enable_rate_limit" default:"true"`
+	RateLimitRPS       int           `json:"rate_limit_rps" default:"10"`
+	RateLimitBurst     int           `json:"rate_limit_burst" default:"20"`
+	EnableInputFilter  bool          `json:"enable_input_filter" default:"true"`
+	MaxCommandLength   int           `json:"max_command_length" default:"1000"`
+	EnableAudit        bool          `json:"enable_audit" default:"true"`
+	AllowedCommands    []string      `json:"allowed_commands"`
+	BlockedCommands    []string      `json:"blocked_commands"`
+	WorkingDirRestrict bool          `json:"working_dir_restrict" default:"true"`
+	AllowedPaths       []string      `json:"allowed_paths"`
 }
 
 // RateLimiter implements token bucket rate limiting
@@ -54,11 +87,11 @@ type RateLimiterConfig struct {
 }
 
 type TokenBucket struct {
-	tokens       int
-	lastRefill   time.Time
-	capacity     int
-	refillRate   int
-	mutex        sync.Mutex
+	tokens     int
+	lastRefill time.Time
+	capacity   int
+	refillRate int
+	mutex      sync.Mutex
 }
 
 // CommandValidator validates and sanitizes commands
@@ -67,19 +100,19 @@ type CommandValidator struct {
 	allowedPattern    *regexp.Regexp
 	blockedPatterns   []*regexp.Regexp
 	dangerousCommands map[string]bool
-	mutex            sync.RWMutex
+	mutex             sync.RWMutex
 }
 
 type ValidationConfig struct {
-	MaxCommandLength     int      `json:"max_command_length" default:"1000"`
-	AllowShellCommands   bool     `json:"allow_shell_commands" default:"false"`
-	AllowFileOperations  bool     `json:"allow_file_operations" default:"true"`
-	AllowNetworkAccess   bool     `json:"allow_network_access" default:"false"`
-	AllowSystemCommands  bool     `json:"allow_system_commands" default:"false"`
-	AllowedCommands      []string `json:"allowed_commands"`
-	BlockedCommands      []string `json:"blocked_commands"`
-	AllowedArguments     []string `json:"allowed_arguments"`
-	BlockedArguments     []string `json:"blocked_arguments"`
+	MaxCommandLength    int      `json:"max_command_length" default:"1000"`
+	AllowShellCommands  bool     `json:"allow_shell_commands" default:"false"`
+	AllowFileOperations bool     `json:"allow_file_operations" default:"true"`
+	AllowNetworkAccess  bool     `json:"allow_network_access" default:"false"`
+	AllowSystemCommands bool     `json:"allow_system_commands" default:"false"`
+	AllowedCommands     []string `json:"allowed_commands"`
+	BlockedCommands     []string `json:"blocked_commands"`
+	AllowedArguments    []string `json:"allowed_arguments"`
+	BlockedArguments    []string `json:"blocked_arguments"`
 }
 
 // AuthProvider interface for authentication
@@ -131,9 +164,9 @@ func NewSecurityManager(config SecurityConfig, logger *logger.Logger) *SecurityM
 			Interval: time.Second,
 		}),
 		commandValidator: NewCommandValidator(ValidationConfig{
-			MaxCommandLength:    config.MaxCommandLength,
-			AllowedCommands:     config.AllowedCommands,
-			BlockedCommands:     config.BlockedCommands,
+			MaxCommandLength: config.MaxCommandLength,
+			AllowedCommands:  config.AllowedCommands,
+			BlockedCommands:  config.BlockedCommands,
 		}),
 	}
 
@@ -160,7 +193,7 @@ func NewCommandValidator(config ValidationConfig) *CommandValidator {
 
 	// Initialize dangerous commands list
 	cv.initializeDangerousCommands()
-	
+
 	// Compile regex patterns
 	cv.compilePatterns()
 
@@ -320,7 +353,7 @@ func (tb *TokenBucket) Allow() error {
 func (tb *TokenBucket) refill() {
 	now := time.Now()
 	elapsed := now.Sub(tb.lastRefill)
-	
+
 	if elapsed >= time.Second {
 		tokensToAdd := int(elapsed.Seconds()) * tb.refillRate
 		tb.tokens += tokensToAdd
@@ -372,24 +405,25 @@ func (cv *CommandValidator) Validate(command string) error {
 
 func (cv *CommandValidator) isDangerousCommand(command string) bool {
 	lowerCmd := strings.ToLower(command)
-	
-	// Check for dangerous command patterns
+
+	// Check for dangerous command patterns (Windows only)
 	dangerousPatterns := []string{
-		"rm -rf /",
-		"mkfs",
+		// 系统破坏命令
 		"format",
 		"del /f /s /q",
 		"rmdir /s /q",
+		"rd /s /q",
+		"diskpart",
+		// 系统控制命令
 		"shutdown",
 		"reboot",
-		"halt",
-		"poweroff",
-		"passwd",
-		"su -",
-		"sudo su",
-		":(){ :|:& };:", // fork bomb
-		"> /dev/sda",
-		"dd if=/dev/zero",
+		"stop-computer",
+		"restart-computer",
+		// Windows fork bomb
+		"%0|%0",
+		// 权限提升
+		"takeown",
+		"icacls",
 	}
 
 	for _, pattern := range dangerousPatterns {
@@ -410,13 +444,13 @@ func (cv *CommandValidator) isDangerousCommand(command string) bool {
 
 func (cv *CommandValidator) isAllowedCommand(command string) bool {
 	baseCommand := cv.extractBaseCommand(command)
-	
+
 	for _, allowed := range cv.config.AllowedCommands {
 		if strings.ToLower(baseCommand) == strings.ToLower(allowed) {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -430,12 +464,12 @@ func (cv *CommandValidator) extractBaseCommand(command string) string {
 }
 
 func (cv *CommandValidator) initializeDangerousCommands() {
+	// Windows dangerous commands only
 	dangerous := []string{
 		"del", "rmdir", "rd", "format", "shutdown", "reboot",
 		"reg delete", "reg add", "net user", "net localgroup",
 		"powershell -enc", "powershell -encodedcommand",
 		"wget", "curl", "nc", "netcat", "telnet",
-		"iptables", "ufw", "firewall",
 	}
 
 	for _, cmd := range dangerous {
@@ -444,13 +478,18 @@ func (cv *CommandValidator) initializeDangerousCommands() {
 }
 
 func (cv *CommandValidator) compilePatterns() {
-	// Compile blocked patterns
+	// Compile blocked patterns (Windows only)
 	blockedPatterns := []string{
-		`(?i).*rm\s+-rf\s+/. *`,
-		`(?i).*dd\s+if=/dev/zero.*`,
-		`(?i).*format\s+.*`,
-		`(?i).*del\s+.*[/.*].*`,
-		`(?i).*rmdir\s+/s.*`,
+		`(?i).*format\s+[a-zA-Z]:.*`,          // format C:
+		`(?i).*del\s+/[fFsS].*`,               // del /f /s
+		`(?i).*rmdir\s+/[sS].*`,               // rmdir /s
+		`(?i).*rd\s+/[sS].*`,                  // rd /s
+		`(?i).*diskpart.*`,                    // diskpart
+		`(?i).*shutdown\s+.*`,                 // shutdown
+		`(?i).*stop-computer.*`,               // Stop-Computer
+		`(?i).*restart-computer.*`,            // Restart-Computer
+		`(?i).*powershell.*-enc.*`,            // powershell -enc
+		`(?i).*powershell.*-encodedcommand.*`, // powershell -encodedcommand
 	}
 
 	for _, pattern := range blockedPatterns {
@@ -506,7 +545,7 @@ func (jp *JWTAuthProvider) ValidatePermissions(ctx context.Context, auth *AuthCo
 // Utility methods
 func (sm *SecurityManager) logSecurityEvent(event SecurityEvent) {
 	event.Timestamp = time.Now()
-	
+
 	if sm.config.EnableAudit {
 		sm.logger.Info(fmt.Sprintf("Security Event: %s - %s", event.EventType, event.Description))
 	}
@@ -520,12 +559,12 @@ func generateSecretKey() string {
 
 // Context helper methods
 func GetAuthContext(ctx context.Context) (*AuthContext, bool) {
-	auth, ok := ctx.Value("auth").(*AuthContext)
+	auth, ok := ctx.Value(authContextKey).(*AuthContext)
 	return auth, ok
 }
 
 func SetAuthContext(ctx context.Context, auth *AuthContext) context.Context {
-	return context.WithValue(ctx, "auth", auth)
+	return context.WithValue(ctx, authContextKey, auth)
 }
 
 // Security middleware
@@ -538,8 +577,8 @@ func (sm *SecurityManager) WrapHandler(handler func(ctx context.Context) error) 
 		}
 
 		// Add security headers to context
-		ctx = context.WithValue(ctx, "security_enabled", sm.config.EnableAuth)
-		ctx = context.WithValue(ctx, "rate_limit_enabled", sm.config.EnableRateLimit)
+		ctx = context.WithValue(ctx, securityEnabledKey, sm.config.EnableAuth)
+		ctx = context.WithValue(ctx, rateLimitEnabledKey, sm.config.EnableRateLimit)
 
 		return handler(ctx)
 	}

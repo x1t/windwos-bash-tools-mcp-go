@@ -1,5 +1,26 @@
 package executor
 
+/*
+	⚠️ 注意: 此文件包含企业级安全执行器的预留实现
+
+	当前状态: 未启用
+	- 本项目当前使用基础的 ShellExecutor (shell.go + bash.go)
+	- SecureBashExecutor 提供了高级安全特性（沙箱、资源限制、网络策略等）
+	- 这些功能已实现但未集成到主服务器中
+
+	如需启用:
+	1. 修改 cmd/server/main.go 中的 NewShellExecutor() 函数
+	2. 返回 executor.NewSecureBashExecutor() 而非 executor.NewShellExecutor()
+	3. 配置相应的安全策略和资源限制
+
+	功能特性:
+	- 沙箱隔离执行环境
+	- CPU/内存/磁盘资源限制
+	- 网络访问策略控制
+	- 进程监控和管理
+	- 高级安全验证
+*/
+
 import (
 	"bufio"
 	"context"
@@ -8,10 +29,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -27,17 +46,17 @@ type SecureBashExecutor struct {
 
 // ExecutionSecurity handles security policies
 type ExecutionSecurity struct {
-	allowedCommands   map[string]bool
-	blockedCommands   map[string]bool
-	allowedPaths      []string
-	blockedPaths      []string
-	maxMemory         int64
-	maxCPU            float64
-	enableChroot      bool
-	enableNetwork     bool
-	allowFileWrites   bool
-	maxProcessCount   int
-	mutex             sync.RWMutex
+	allowedCommands map[string]bool
+	blockedCommands map[string]bool
+	allowedPaths    []string
+	blockedPaths    []string
+	maxMemory       int64
+	maxCPU          float64
+	enableChroot    bool
+	enableNetwork   bool
+	allowFileWrites bool
+	maxProcessCount int
+	mutex           sync.RWMutex
 }
 
 // Sandbox provides isolation for command execution
@@ -58,9 +77,9 @@ type NetworkPolicy struct {
 }
 
 type ResourceLimits struct {
-	maxMemory   int64  // bytes
-	maxCPU      float64 // percentage
-	maxDisk     int64  // bytes
+	maxMemory    int64   // bytes
+	maxCPU       float64 // percentage
+	maxDisk      int64   // bytes
 	maxOpenFiles int
 	maxProcesses int
 }
@@ -80,22 +99,22 @@ type ExecutionContext struct {
 
 // ExecutionResult contains the results of command execution
 type ExecutionResult struct {
-	Output       string
-	ErrorOutput  string
-	ExitCode     int
-	ExecutionTime time.Duration
-	MemoryUsed   int64
-	ProcessesKilled int
+	Output             string
+	ErrorOutput        string
+	ExitCode           int
+	ExecutionTime      time.Duration
+	MemoryUsed         int64
+	ProcessesKilled    int
 	SecurityViolations []string
-	TimedOut     bool
-	Killed       bool
-	Success      bool
+	TimedOut           bool
+	Killed             bool
+	Success            bool
 }
 
 // ProcessMonitor tracks running processes
 type ProcessMonitor struct {
-	processes map[int]*ProcessInfo
-	mutex     sync.RWMutex
+	processes    map[int]*ProcessInfo
+	mutex        sync.RWMutex
 	maxProcesses int
 }
 
@@ -116,7 +135,7 @@ func NewSecureBashExecutor() *SecureBashExecutor {
 		allowedCommands: make(map[string]bool),
 		blockedCommands: make(map[string]bool),
 		maxMemory:       512 * 1024 * 1024, // 512MB
-		maxCPU:          80.0,             // 80%
+		maxCPU:          80.0,              // 80%
 		enableChroot:    false,
 		enableNetwork:   false,
 		allowFileWrites: true,
@@ -126,8 +145,11 @@ func NewSecureBashExecutor() *SecureBashExecutor {
 	// Initialize default security policies
 	security.initializeDefaultPolicies()
 
-	sandbox, _ := NewSandbox()
-	
+	sandbox, err := NewSandbox()
+	if err != nil {
+		// Sandbox creation failed, will run without sandbox isolation
+		fmt.Fprintf(os.Stderr, "Warning: failed to create sandbox: %v, running without sandbox isolation\n", err)
+	}
 	return &SecureBashExecutor{
 		defaultTimeout: 10 * time.Second,
 		security:       security,
@@ -144,17 +166,17 @@ func NewSandbox() (*Sandbox, error) {
 	}
 
 	return &Sandbox{
-		rootDir:   tempDir,
-		tempDir:   tempDir,
+		rootDir: tempDir,
+		tempDir: tempDir,
 		networkPolicy: NetworkPolicy{
 			allowOutbound: false,
 		},
 		resources: ResourceLimits{
-			maxMemory:     256 * 1024 * 1024, // 256MB
-			maxCPU:        50.0,              // 50%
-			maxDisk:       100 * 1024 * 1024, // 100MB
-			maxOpenFiles:  100,
-			maxProcesses:  5,
+			maxMemory:    256 * 1024 * 1024, // 256MB
+			maxCPU:       50.0,              // 50%
+			maxDisk:      100 * 1024 * 1024, // 100MB
+			maxOpenFiles: 100,
+			maxProcesses: 5,
 		},
 	}, nil
 }
@@ -208,18 +230,13 @@ func (sbe *SecureBashExecutor) Execute(ctx context.Context, execCtx *ExecutionCo
 }
 
 func (sbe *SecureBashExecutor) setupCommand(ctx context.Context, execCtx *ExecutionContext) (*exec.Cmd, error) {
-	// Determine command based on OS
+	// Windows command execution
 	var cmd *exec.Cmd
-	
-	if runtime.GOOS == "windows" {
-		if strings.Contains(strings.ToLower(execCtx.Command), "powershell") {
-			cmd = exec.CommandContext(ctx, "powershell", "-Command", execCtx.Command)
-		} else {
-			cmd = exec.CommandContext(ctx, "cmd", "/C", execCtx.Command)
-		}
+
+	if strings.Contains(strings.ToLower(execCtx.Command), "powershell") {
+		cmd = exec.CommandContext(ctx, "powershell", "-Command", execCtx.Command)
 	} else {
-		// Unix-like systems
-		cmd = exec.CommandContext(ctx, "sh", "-c", execCtx.Command)
+		cmd = exec.CommandContext(ctx, "cmd", "/C", execCtx.Command)
 	}
 
 	// Set working directory
@@ -227,11 +244,11 @@ func (sbe *SecureBashExecutor) setupCommand(ctx context.Context, execCtx *Execut
 	if workingDir == "" {
 		workingDir = sbe.workingDir
 	}
-	
+
 	if !sbe.security.isPathAllowed(workingDir) {
 		return nil, fmt.Errorf("working directory not allowed: %s", workingDir)
 	}
-	
+
 	cmd.Dir = workingDir
 
 	// Set environment variables
@@ -261,17 +278,12 @@ func (sbe *SecureBashExecutor) setupSandboxCommand(ctx context.Context, execCtx 
 
 	// Copy command to sandbox
 	sandboxCmd := execCtx.Command
-	
-	// For Unix systems, we could use chroot or namespaces
-	// For simplicity, we'll use the temp directory as working dir
-	if runtime.GOOS == "windows" {
-		if strings.Contains(strings.ToLower(sandboxCmd), "powershell") {
-			return exec.CommandContext(ctx, "powershell", "-Command", sandboxCmd), nil
-		} else {
-			return exec.CommandContext(ctx, "cmd", "/C", sandboxCmd), nil
-		}
+
+	// Windows sandbox command execution
+	if strings.Contains(strings.ToLower(sandboxCmd), "powershell") {
+		return exec.CommandContext(ctx, "powershell", "-Command", sandboxCmd), nil
 	} else {
-		return exec.CommandContext(ctx, "sh", "-c", sandboxCmd), nil
+		return exec.CommandContext(ctx, "cmd", "/C", sandboxCmd), nil
 	}
 }
 
@@ -333,16 +345,9 @@ func (sbe *SecureBashExecutor) executeWithMonitoring(ctx context.Context, cmd *e
 		// Timeout occurred
 		result.TimedOut = true
 		result.Killed = true
-		
+
 		if cmd.Process != nil {
-			if runtime.GOOS == "windows" {
-				cmd.Process.Kill()
-			} else {
-				// Try graceful termination first
-				cmd.Process.Signal(syscall.SIGTERM)
-				time.Sleep(100 * time.Millisecond)
-				cmd.Process.Kill()
-			}
+			cmd.Process.Kill()
 		}
 
 		close(outputChan)
@@ -360,7 +365,7 @@ func (sbe *SecureBashExecutor) executeWithMonitoring(ctx context.Context, cmd *e
 	case <-ctx.Done():
 		// Context cancelled
 		result.Killed = true
-		
+
 		if cmd.Process != nil {
 			cmd.Process.Kill()
 		}
@@ -374,7 +379,7 @@ func (sbe *SecureBashExecutor) executeWithMonitoring(ctx context.Context, cmd *e
 
 func (sbe *SecureBashExecutor) collectOutput(pipe interface{}, outputChan chan<- string, maxSize int64) {
 	var scanner *bufio.Scanner
-	
+
 	switch p := pipe.(type) {
 	case *os.File:
 		scanner = bufio.NewScanner(p)
@@ -395,17 +400,12 @@ func (sbe *SecureBashExecutor) collectOutput(pipe interface{}, outputChan chan<-
 }
 
 func (sbe *SecureBashExecutor) setResourceLimits(cmd *exec.Cmd) {
-	// Set resource limits based on platform
-	if runtime.GOOS != "windows" {
-		// Unix-like systems can set rlimit
-		// This would require syscall usage
-		// For simplicity, we'll skip this in this implementation
-	}
+	// Resource limits are handled by the sandbox on Windows
 }
 
 func (sbe *SecureBashExecutor) validateCommand(command string) []string {
 	var violations []string
-	
+
 	sbe.security.mutex.RLock()
 	defer sbe.security.mutex.RUnlock()
 
@@ -418,13 +418,17 @@ func (sbe *SecureBashExecutor) validateCommand(command string) []string {
 		}
 	}
 
-	// Check for dangerous patterns
+	// Check for dangerous patterns (Windows only)
 	dangerousPatterns := []string{
-		`(?i).*rm\s+-rf\s+/. *`,
-		`(?i).*dd\s+if=/dev/zero.*`,
-		`(?i).*format\s+.*`,
-		`(?i).*del\s+.*[/.*].*`,
-		`(?i).*fork\s+bomb.*`,
+		`(?i).*format\s+[a-zA-Z]:.*`, // format C:
+		`(?i).*del\s+/[fFsS].*`,      // del /f /s
+		`(?i).*rmdir\s+/[sS].*`,      // rmdir /s
+		`(?i).*rd\s+/[sS].*`,         // rd /s
+		`(?i).*diskpart.*`,           // diskpart
+		`(?i).*shutdown\s+.*`,        // shutdown
+		`(?i).*stop-computer.*`,      // Stop-Computer
+		`(?i).*restart-computer.*`,   // Restart-Computer
+		`(?i).*%0\|%0.*`,             // Windows fork bomb
 	}
 
 	for _, pattern := range dangerousPatterns {
@@ -445,11 +449,11 @@ func (sbe *SecureBashExecutor) validateCommand(command string) []string {
 func (sbe *SecureBashExecutor) ExecuteCommand(command string, timeoutMs int) (string, int, error) {
 	ctx := context.Background()
 	execCtx := &ExecutionContext{
-		Command:         command,
-		Timeout:         time.Duration(timeoutMs) * time.Millisecond,
-		RequireSandbox:  false,
-		AllowNetwork:    false,
-		MaxOutputSize:   sbe.maxOutputSize,
+		Command:        command,
+		Timeout:        time.Duration(timeoutMs) * time.Millisecond,
+		RequireSandbox: false,
+		AllowNetwork:   false,
+		MaxOutputSize:  sbe.maxOutputSize,
 	}
 
 	result, err := sbe.Execute(ctx, execCtx)
@@ -471,28 +475,40 @@ func (sbe *SecureBashExecutor) ValidateCommand(command string) error {
 
 // ExecutionSecurity methods
 func (es *ExecutionSecurity) initializeDefaultPolicies() {
-	// Block dangerous commands
+	// Block dangerous commands (Windows only)
 	blockedCommands := []string{
-		"rm", "rmdir", "del", "format", "fdisk", "mkfs",
-		"shutdown", "reboot", "halt", "poweroff",
-		"passwd", "su", "sudo", "chown", "chmod",
-		"iptables", "ufw", "firewall",
-		"wget", "curl", "nc", "netcat", "telnet",
-		"dd", "format", "mkfs",
+		// 文件删除命令
+		"del", "rmdir", "rd",
+		// 磁盘操作命令
+		"format", "diskpart",
+		// 系统控制命令
+		"shutdown", "reboot", "stop-computer", "restart-computer",
+		// 网络下载命令
+		"bitsadmin", "certutil",
+		// PowerShell 编码命令
+		"powershell -enc", "powershell -encodedcommand",
+		// 注册表操作
+		"reg delete", "reg add",
+		// 用户管理
+		"net user", "net localgroup",
 	}
 
 	for _, cmd := range blockedCommands {
 		es.blockedCommands[cmd] = true
 	}
 
-	// Allow safe commands
+	// Allow safe commands (Windows compatible)
 	allowedCommands := []string{
-		"ls", "dir", "echo", "cat", "type", "head", "tail",
-		"grep", "find", "wc", "sort", "uniq",
-		"date", "whoami", "pwd", "hostname",
-		"ps", "top", "df", "du", "free",
+		// 文件浏览
+		"dir", "type", "echo", "more", "findstr",
+		// 系统信息
+		"date", "time", "whoami", "hostname", "systeminfo",
+		"tasklist", "ipconfig", "netstat",
+		// 开发工具
 		"python", "node", "java", "go", "gcc", "g++",
 		"git", "npm", "pip", "cargo", "yarn",
+		// PowerShell cmdlets
+		"get-process", "get-childitem", "get-content", "get-date",
 	}
 
 	for _, cmd := range allowedCommands {
@@ -531,7 +547,7 @@ func getWorkingDirectory() string {
 	if wd, err := os.Getwd(); err == nil {
 		return wd
 	}
-	return "/tmp"
+	return os.TempDir()
 }
 
 // Cleanup methods
@@ -549,9 +565,9 @@ func (sbe *SecureBashExecutor) GetSecurityStatus() map[string]interface{} {
 	defer sbe.mutex.RUnlock()
 
 	return map[string]interface{}{
-		"sandbox_enabled":    sbe.sandbox != nil,
-		"working_directory":  sbe.workingDir,
-		"max_output_size":    sbe.maxOutputSize,
+		"sandbox_enabled":        sbe.sandbox != nil,
+		"working_directory":      sbe.workingDir,
+		"max_output_size":        sbe.maxOutputSize,
 		"allowed_commands_count": len(sbe.security.allowedCommands),
 		"blocked_commands_count": len(sbe.security.blockedCommands),
 	}

@@ -1,11 +1,20 @@
 package executor
 
+/*
+	Windows专用Shell执行器 - 仅支持PowerShell
+	本模块专为Windows设计，仅支持以下Shell:
+	- PowerShell 7+ (pwsh)
+	- Windows PowerShell 5.x (powershell)
+
+	不支持Git Bash、CMD或其他Shell。
+*/
+
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -15,9 +24,7 @@ type ShellType int
 
 const (
 	PowerShell7 ShellType = iota
-	GitBash
 	PowerShell
-	CMD
 	Unknown
 )
 
@@ -26,12 +33,8 @@ func (s ShellType) String() string {
 	switch s {
 	case PowerShell7:
 		return "pwsh"
-	case GitBash:
-		return "git-bash"
 	case PowerShell:
 		return "powershell"
-	case CMD:
-		return "cmd"
 	default:
 		return "unknown"
 	}
@@ -48,35 +51,25 @@ func NewShellExecutor() *ShellExecutor {
 	executor := &ShellExecutor{
 		shellPaths: make(map[ShellType]string),
 	}
-	
+
 	// 检测可用的Shell
 	executor.detectShells()
-	
+
 	return executor
 }
 
 // detectShells 检测系统中可用的Shell
 func (e *ShellExecutor) detectShells() {
-	if runtime.GOOS != "windows" {
-		// 非Windows系统，使用默认shell
-		e.preferredShell = Unknown
-		return
-	}
-	
+	// Windows Shell detection - 仅支持PowerShell
 	// 按优先级检测Shell
 	shells := []struct {
 		shellType ShellType
 		commands  []string
 	}{
 		{PowerShell7, []string{"pwsh", "pwsh.exe"}},
-		{GitBash, []string{
-			`"C:\Program Files\Git\bin\bash.exe"`,
-			`"C:\Program Files (x86)\Git\bin\bash.exe"`,
-		}},
 		{PowerShell, []string{"powershell", "powershell.exe"}},
-		{CMD, []string{"cmd", "cmd.exe"}},
 	}
-	
+
 	for _, shell := range shells {
 		for _, cmd := range shell.commands {
 			if path, err := exec.LookPath(strings.Trim(cmd, `"`)); err == nil {
@@ -106,7 +99,7 @@ func (e *ShellExecutor) ExecuteCommand(command string, timeout int) (string, int
 	if e.preferredShell == Unknown {
 		return "", -1, fmt.Errorf("no suitable shell found")
 	}
-	
+
 	return e.ExecuteWithShell(e.preferredShell, command, timeout)
 }
 
@@ -116,45 +109,54 @@ func (e *ShellExecutor) ExecuteWithShell(shellType ShellType, command string, ti
 	if !exists {
 		return "", -1, fmt.Errorf("shell %s not available", shellType.String())
 	}
-	
+
 	// 准备命令参数
 	var args []string
 	switch shellType {
 	case PowerShell7, PowerShell:
 		// PowerShell执行
 		args = []string{"-Command", command}
-	case GitBash:
-		// Git Bash执行
-		args = []string{"-c", command}
-	case CMD:
-		// CMD执行
-		args = []string{"/C", command}
 	default:
 		return "", -1, fmt.Errorf("unsupported shell type: %s", shellType.String())
 	}
-	
+
 	var cmd *exec.Cmd
-	
-	// 设置超时 - 使用正确的context机制
+	ctx := context.Background()
+	var cancel context.CancelFunc
+
+	// 设置超时 - 使用正确的 context 机制，便于超时后统一返回
 	if timeout > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
-		defer cancel()
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Millisecond)
+		defer func() {
+			if cancel != nil {
+				cancel()
+			}
+		}()
 		cmd = exec.CommandContext(ctx, shellPath, args...)
 	} else {
 		cmd = exec.Command(shellPath, args...)
 	}
-	
+
 	output, err := cmd.CombinedOutput()
+
+	// 优先判断是否为超时：CommandContext 超时后会杀进程，Run 返回的 err 可能是 Wait 的退出错误
+	if ctx.Err() == context.DeadlineExceeded {
+		outStr := string(output)
+		return outStr, -1, fmt.Errorf("command timed out after %dms: %w", timeout, context.DeadlineExceeded)
+	}
+
 	exitCode := 0
-	
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
 	if err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {
 			exitCode = exitError.ExitCode()
-		} else {
+		} else if !errors.Is(err, context.DeadlineExceeded) {
 			exitCode = -1
 		}
 	}
-	
+
 	return string(output), exitCode, err
 }
 
@@ -170,8 +172,8 @@ func (e *ShellExecutor) GetAvailableShells() []ShellType {
 // PrintShellInfo 打印Shell信息
 func (e *ShellExecutor) PrintShellInfo() {
 	// MCP协议要求stdout只用于JSON-RPC通信，调试信息输出到stderr
-	fmt.Fprintf(os.Stderr, "🔧 检测到的Shell环境:\n")
-	for i, shellType := range []ShellType{PowerShell7, GitBash, PowerShell, CMD} {
+	fmt.Fprintf(os.Stderr, "🔧 检测到的Shell环境 (仅支持PowerShell):\n")
+	for i, shellType := range []ShellType{PowerShell7, PowerShell} {
 		if path, exists := e.shellPaths[shellType]; exists {
 			status := "✅"
 			if shellType == e.preferredShell {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -12,8 +13,27 @@ import (
 	"time"
 
 	"mcp-bash-tools/internal/executor"
+	"mcp-bash-tools/internal/security"
 
+	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// 常量定义
+const (
+	// 超时配置
+	DefaultTimeoutMs = 30000  // 默认超时时间（毫秒）
+	MinTimeoutMs     = 1000   // 最小超时时间（毫秒）
+	MaxTimeoutMs     = 600000 // 最大超时时间（毫秒）
+
+	// 任务配置
+	MaxShellIDLength   = 100   // Shell ID 最大长度
+	MaxBashIDLength    = 100   // Bash ID 最大长度
+	MaxBackgroundTasks = 50    // 最大后台任务数
+	MaxCommandLength   = 10000 // 最大命令长度（字符）
+
+	// 超时等待配置
+	DoneChannelTimeout = 5 * time.Second // done channel 等待超时
 )
 
 // NewShellExecutor 创建实际的ShellExecutor
@@ -23,7 +43,7 @@ func NewShellExecutor() ShellExecutorInterface {
 
 // BashArguments 定义Bash工具的输入参数 - 使用官方标准命名
 type BashArguments struct {
-	Command         string `json:"command" jsonschema:"要执行的PowerShell/CMD命令"`
+	Command         string `json:"command" jsonschema:"要执行的PowerShell命令"`
 	Timeout         int    `json:"timeout" jsonschema:"命令超时时间(毫秒),必填,范围1000-600000"`
 	Description     string `json:"description,omitempty" jsonschema:"命令描述,用于日志记录"`
 	RunInBackground bool   `json:"run_in_background,omitempty" jsonschema:"是否在后台执行命令"`
@@ -63,14 +83,16 @@ type KillShellResult struct {
 
 // BackgroundTask 表示一个后台任务
 type BackgroundTask struct {
-	ID        string    `json:"id"`
-	Command   string    `json:"command"`
-	Output    string    `json:"output"`
-	Status    string    `json:"status"` // running, completed, failed, killed
-	StartTime time.Time `json:"startTime"`
-	Error     string    `json:"error,omitempty"`
-	ExitCode  *int      `json:"exitCode,omitempty"`
-	TempFile  string    `json:"tempFile,omitempty"` // 临时文件路径用于存储输出
+	ID        string             `json:"id"`
+	Command   string             `json:"command"`
+	Output    string             `json:"output"`
+	Status    string             `json:"status"` // running, completed, failed, killed
+	StartTime time.Time          `json:"startTime"`
+	Error     string             `json:"error,omitempty"`
+	ExitCode  *int               `json:"exitCode,omitempty"`
+	TempFile  string             `json:"tempFile,omitempty"` // 临时文件路径用于存储输出
+	Process   *os.Process        `json:"-"`                  // 进程句柄，用于终止进程
+	Cancel    context.CancelFunc `json:"-"`                  // Context取消函数，用于终止命令
 }
 
 // ShellExecutorInterface 定义Shell执行器接口
@@ -96,60 +118,47 @@ func NewMCPServer() *MCPServer {
 
 // BashHandler 处理Bash命令执行 - 使用官方标准Handler签名
 func (s *MCPServer) BashHandler(ctx context.Context, req *mcp.CallToolRequest, args BashArguments) (*mcp.CallToolResult, BashResult, error) {
-	// 参数验证 - 工具级错误（用户可见，不终止连接）
+	// 参数验证
 	if args.Command == "" {
-		// 返回详细的错误信息
-		errorMsg := "command参数是必需的"
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{Text: errorMsg},
-			},
-			IsError: true,
-		}, BashResult{
+		errorMsg := "command is required"
+		return nil, BashResult{
 			ExitCode: 1,
 			Output:   errorMsg,
-		}, nil
+		}, fmt.Errorf("%s", errorMsg)
+	}
+
+	// 命令长度验证
+	if len(args.Command) > MaxCommandLength {
+		errorMsg := fmt.Sprintf("command too long (max %d characters), got: %d", MaxCommandLength, len(args.Command))
+		return nil, BashResult{
+			ExitCode: 1,
+			Output:   errorMsg,
+		}, fmt.Errorf("%s", errorMsg)
 	}
 
 	if args.Timeout == 0 {
-			// 返回详细的错误信息
-			errorMsg := "timeout参数是必需的，必须在1000到600000毫秒之间"
-			return &mcp.CallToolResult{
-				Content: []mcp.Content{
-					&mcp.TextContent{Text: errorMsg},
-				},
-				IsError: true,
-			}, BashResult{
-				ExitCode: 1,
-				Output:   errorMsg,
-			}, nil
-		}
-
-		if args.Timeout < 1000 || args.Timeout > 600000 {
-		errorMsg := fmt.Sprintf("timeout必须在1000到600000毫秒之间，当前值: %d", args.Timeout)
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{Text: errorMsg},
-			},
-			IsError: true,
-		}, BashResult{
+		errorMsg := fmt.Sprintf("timeout is required and must be between %d and %d milliseconds", MinTimeoutMs, MaxTimeoutMs)
+		return nil, BashResult{
 			ExitCode: 1,
 			Output:   errorMsg,
-		}, nil
+		}, fmt.Errorf("%s", errorMsg)
+	}
+
+	if args.Timeout < MinTimeoutMs || args.Timeout > MaxTimeoutMs {
+		errorMsg := fmt.Sprintf("timeout must be between %d and %d milliseconds, got: %d", MinTimeoutMs, MaxTimeoutMs, args.Timeout)
+		return nil, BashResult{
+			ExitCode: 1,
+			Output:   errorMsg,
+		}, fmt.Errorf("%s", errorMsg)
 	}
 
 	// 安全检查
-	if isDangerousCommand(args.Command) {
-		errorMsg := fmt.Sprintf("命令因安全原因被拒绝: %s", args.Command)
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{Text: errorMsg},
-			},
-			IsError: true,
-		}, BashResult{
+	if security.IsDangerousCommand(args.Command) {
+		errorMsg := fmt.Sprintf("command rejected for security reasons: %s", args.Command)
+		return nil, BashResult{
 			ExitCode: 1,
 			Output:   errorMsg,
-		}, nil
+		}, fmt.Errorf("%s", errorMsg)
 	}
 
 	// 日志记录
@@ -160,9 +169,23 @@ func (s *MCPServer) BashHandler(ctx context.Context, req *mcp.CallToolRequest, a
 	fmt.Fprintf(os.Stderr, "Executing command: %s\n", logMsg)
 
 	if args.RunInBackground {
-		// 后台执行
+		// 检查后台任务数量限制
+		s.mutex.RLock()
+		taskCount := len(s.backgroundTasks)
+		s.mutex.RUnlock()
+
+		if taskCount >= MaxBackgroundTasks {
+			errorMsg := fmt.Sprintf("maximum background tasks limit reached (%d/%d)", taskCount, MaxBackgroundTasks)
+			return nil, BashResult{
+				ExitCode: 1,
+				Output:   errorMsg,
+			}, fmt.Errorf("%s", errorMsg)
+		}
+
+		// 后台执行 - 不设置超时限制
 		s.mutex.Lock()
-		taskID := fmt.Sprintf("bash_%d", time.Now().UnixNano())
+		// 使用UUID保证全局唯一性
+		taskID := fmt.Sprintf("bash_%s", uuid.New().String())
 		task := &BackgroundTask{
 			ID:        taskID,
 			Command:   args.Command,
@@ -171,58 +194,111 @@ func (s *MCPServer) BashHandler(ctx context.Context, req *mcp.CallToolRequest, a
 		}
 		s.backgroundTasks[taskID] = task
 
-		// 启动后台任务
-		go s.executeBackgroundCommand(task, args.Timeout)
+		// 启动后台任务（传入0表示无超时限制）
+		go s.executeBackgroundCommand(task, 0)
 		s.mutex.Unlock()
 
-		// 返回结果 - 使用结构化输出，不填充Content
+		// 返回结果
 		return nil, BashResult{
 			ExitCode: 0,
 			ShellID:  taskID,
+			Output:   fmt.Sprintf("Background task started with ID: %s", taskID),
 		}, nil
-	} else {
-		// 前台执行
-		output, exitCode, err := s.shellExecutor.ExecuteCommand(args.Command, args.Timeout)
-
-		killed := false
-	if err != nil {
-		// 检查是否为超时导致的进程终止
-		// 在Windows上，context超时通常返回"exit status 1"
-		// 我们需要检查超时时间是否已过以及错误类型
-		if strings.Contains(err.Error(), "killed") || 
-		   strings.Contains(err.Error(), "context deadline exceeded") ||
-		   strings.Contains(err.Error(), "signal: killed") {
-			killed = true
-		}
 	}
 
-		if err != nil && !killed {
-			// 错误信息包含在输出中，返回成功状态以传递BashResult
-			errorOutput := output
-			if errorOutput == "" {
-				errorOutput = fmt.Sprintf("命令执行失败: %v", err)
-			} else {
-				errorOutput = fmt.Sprintf("%s\n错误: %v", output, err)
+	// 前台执行 - 带超时，超时后自动转后台
+	resultChan := make(chan struct {
+		output   string
+		exitCode int
+		err      error
+	}, 1)
+
+	// 在goroutine中执行命令
+	go func() {
+		output, exitCode, err := s.shellExecutor.ExecuteCommand(args.Command, args.Timeout)
+		resultChan <- struct {
+			output   string
+			exitCode int
+			err      error
+		}{output, exitCode, err}
+	}()
+
+	// 等待结果或超时
+	select {
+	case result := <-resultChan:
+		// 命令在超时前完成
+		killed := false
+		if result.err != nil {
+			errStr := result.err.Error()
+			if strings.Contains(errStr, "killed") ||
+				strings.Contains(errStr, "timed out") ||
+				strings.Contains(errStr, "context deadline exceeded") {
+				killed = true
 			}
-			
-			// 返回CallToolResult包含错误信息，同时返回BashResult
-			return &mcp.CallToolResult{
-				Content: []mcp.Content{
-					&mcp.TextContent{Text: errorOutput},
-				},
-				IsError: true, // 标记为错误，但仍然传递输出
-			}, BashResult{
+		}
+
+		if result.err != nil && !killed {
+			errorOutput := result.output
+			if errorOutput == "" {
+				errorOutput = fmt.Sprintf("command execution failed: %v", result.err)
+			} else {
+				errorOutput = fmt.Sprintf("%s\nError: %v", result.output, result.err)
+			}
+
+			return nil, BashResult{
 				Output:   errorOutput,
-				ExitCode: exitCode,
+				ExitCode: result.exitCode,
 				Killed:   killed,
 			}, nil
 		}
 
-		// 成功返回 - 使用结构化输出
+		// 成功返回
 		return nil, BashResult{
-			Output:   output,
-			ExitCode: exitCode,
+			Output:   result.output,
+			ExitCode: result.exitCode,
 			Killed:   killed,
+		}, nil
+
+	case <-time.After(time.Duration(args.Timeout) * time.Millisecond):
+		// 超时！自动转为后台任务
+		taskID := fmt.Sprintf("bash_%s", uuid.New().String())
+
+		task := &BackgroundTask{
+			ID:        taskID,
+			Command:   args.Command,
+			Status:    "running",
+			StartTime: time.Now(),
+			Output:    fmt.Sprintf("Task exceeded timeout (%dms), converted to background execution\n", args.Timeout),
+		}
+
+		s.mutex.Lock()
+		s.backgroundTasks[taskID] = task
+		s.mutex.Unlock()
+
+		// 继续监控任务完成（任务实际上还在执行）
+		go func() {
+			result := <-resultChan
+
+			s.mutex.Lock()
+			if task, exists := s.backgroundTasks[taskID]; exists {
+				task.Output += result.output
+				task.ExitCode = &result.exitCode
+				if result.err != nil {
+					task.Status = "failed"
+					task.Error = result.err.Error()
+				} else {
+					task.Status = "completed"
+				}
+			}
+			s.mutex.Unlock()
+		}()
+
+		// 立即返回，告诉用户任务已转后台
+		return nil, BashResult{
+			Output:   fmt.Sprintf("⏱️ Command exceeded timeout (%dms), automatically converted to background task.\n\n✅ Task ID: %s\n\n💡 Use 'bash_output' tool with bash_id='%s' to check progress.\n💡 Use 'kill_shell' tool with shell_id='%s' to terminate if needed.", args.Timeout, taskID, taskID, taskID),
+			ExitCode: 0,
+			ShellID:  taskID,
+			Killed:   false,
 		}, nil
 	}
 }
@@ -232,51 +308,62 @@ func (s *MCPServer) BashOutputHandler(ctx context.Context, req *mcp.CallToolRequ
 	if args.BashID == "" {
 		return nil, BashOutputResult{
 			Status: "failed",
-		}, fmt.Errorf("bash_id参数是必需的")
+		}, fmt.Errorf("bash_id is required")
 	}
 
-	if len(args.BashID) > 100 {
-		errorMsg := fmt.Sprintf("bash_id过长(最大100字符)，当前长度: %d", len(args.BashID))
+	if len(args.BashID) > MaxBashIDLength {
+		errorMsg := fmt.Sprintf("bash_id is too long (max %d characters), got: %d", MaxBashIDLength, len(args.BashID))
 		return nil, BashOutputResult{
 			Status: "failed",
 			Output: errorMsg,
-		}, fmt.Errorf("bash_id过长(最大100字符)，当前长度: %d", len(args.BashID))
+		}, fmt.Errorf("bash_id is too long (max %d characters), got: %d", MaxBashIDLength, len(args.BashID))
 	}
 
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
+	// 先获取任务信息（短暂持锁），然后释放锁再进行文件I/O
+	var taskOutput string
+	var taskStatus string
+	var taskExitCode *int
+	var tempFilePath string
 
+	s.mutex.RLock()
 	task, exists := s.backgroundTasks[args.BashID]
 	if !exists {
-		errorMsg := fmt.Sprintf("未找到后台任务: %s", args.BashID)
+		s.mutex.RUnlock()
+		errorMsg := fmt.Sprintf("background task not found: %s", args.BashID)
 		return nil, BashOutputResult{
 			Status: "not_found",
 			Output: errorMsg,
-		}, fmt.Errorf("未找到后台任务: %s", args.BashID)
+		}, fmt.Errorf("background task not found: %s", args.BashID)
 	}
 
-	// 从临时文件中读取最新的输出内容
-	output := task.Output
-	if task.TempFile != "" {
-		// 从临时文件中读取最新的输出
-		if content, err := os.ReadFile(task.TempFile); err == nil {
+	// 复制必要的信息，避免持锁进行I/O操作
+	taskOutput = task.Output
+	taskStatus = task.Status
+	if task.ExitCode != nil {
+		exitCode := *task.ExitCode
+		taskExitCode = &exitCode
+	}
+	tempFilePath = task.TempFile
+	s.mutex.RUnlock()
+
+	// 在锁外部读取临时文件（避免持锁I/O导致的性能问题和潜在死锁）
+	output := taskOutput
+	if tempFilePath != "" {
+		if content, err := os.ReadFile(tempFilePath); err == nil {
 			output = string(content)
-			// 更新内存中的输出，以便后续调用也能够获取到最新内容
-			// 使用原子操作或简化锁策略避免复杂的锁升级降级
-			// 这里我们选择不立即更新内存，因为临时文件已经包含最新内容
-			// 如果需要更新内存，可以在任务完成时统一更新
 		}
+		// 如果文件读取失败，使用内存中的输出
 	}
 
 	if args.Filter != "" {
 		// 使用正则表达式过滤输出
 		regex, err := regexp.Compile(args.Filter)
 		if err != nil {
-			errorMsg := fmt.Sprintf("无效的正则表达式过滤模式 '%s': %v", args.Filter, err)
+			errorMsg := fmt.Sprintf("invalid regex filter pattern '%s': %v", args.Filter, err)
 			return nil, BashOutputResult{
 				Status: "failed",
 				Output: errorMsg,
-			}, fmt.Errorf("无效的过滤模式 '%s': %v", args.Filter, err)
+			}, fmt.Errorf("invalid filter pattern '%s': %v", args.Filter, err)
 		}
 
 		lines := strings.Split(output, "\n")
@@ -290,12 +377,9 @@ func (s *MCPServer) BashOutputHandler(ctx context.Context, req *mcp.CallToolRequ
 	}
 
 	result := BashOutputResult{
-		Output: output,
-		Status: task.Status,
-	}
-
-	if task.ExitCode != nil {
-		result.ExitCode = task.ExitCode
+		Output:   output,
+		Status:   taskStatus,
+		ExitCode: taskExitCode,
 	}
 
 	// 成功返回 - 使用结构化输出
@@ -305,61 +389,67 @@ func (s *MCPServer) BashOutputHandler(ctx context.Context, req *mcp.CallToolRequ
 // KillShellHandler 处理KillShell工具调用 - 使用官方标准Handler签名
 func (s *MCPServer) KillShellHandler(ctx context.Context, req *mcp.CallToolRequest, args KillShellArguments) (*mcp.CallToolResult, KillShellResult, error) {
 	if args.ShellID == "" {
-		errorMsg := "shell_id参数是必需的"
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{Text: errorMsg},
-			},
-			IsError: true,
-		}, KillShellResult{
+		errorMsg := "shell_id is required"
+		return nil, KillShellResult{
 			ShellID: "",
 			Message: errorMsg,
-		}, nil
+		}, fmt.Errorf("%s", errorMsg)
 	}
 
-	if len(args.ShellID) > 100 {
-		errorMsg := fmt.Sprintf("shell_id过长(最大100字符)，当前长度: %d", len(args.ShellID))
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{Text: errorMsg},
-			},
-			IsError: true,
-		}, KillShellResult{
+	if len(args.ShellID) > MaxShellIDLength {
+		errorMsg := fmt.Sprintf("shell_id is too long (max %d characters), got: %d", MaxShellIDLength, len(args.ShellID))
+		return nil, KillShellResult{
 			ShellID: args.ShellID,
 			Message: errorMsg,
-		}, nil
+		}, fmt.Errorf("%s", errorMsg)
 	}
 
 	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
 	task, exists := s.backgroundTasks[args.ShellID]
 	if !exists {
-		errorMsg := fmt.Sprintf("未找到后台任务: %s", args.ShellID)
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{Text: errorMsg},
-			},
-			IsError: true,
-		}, KillShellResult{
+		s.mutex.Unlock()
+		return nil, KillShellResult{
 			ShellID: args.ShellID,
-			Message: errorMsg,
-		}, nil
+			Message: fmt.Sprintf("background task not found: %s", args.ShellID),
+		}, fmt.Errorf("background task not found: %s", args.ShellID)
 	}
 
-	// 终止后台任务
-	if task.Status == "running" {
+	// 获取需要的信息，然后释放锁
+	process := task.Process
+	cancelFunc := task.Cancel
+	tempFilePath := task.TempFile
+	wasRunning := task.Status == "running"
+
+	// 更新任务状态
+	if wasRunning {
 		task.Status = "killed"
 		task.Error = "Task killed by user request"
 	}
 
-	// 清理临时文件
-	if task.TempFile != "" {
-		os.Remove(task.TempFile)
-	}
-
 	// 从后台任务列表中移除
 	delete(s.backgroundTasks, args.ShellID)
+	s.mutex.Unlock()
+
+	// 在锁外部执行实际的进程终止和资源清理
+	// 先调用Cancel函数取消Context
+	if cancelFunc != nil {
+		cancelFunc()
+	}
+
+	// 强制终止进程（如果进程仍在运行）
+	if process != nil {
+		if err := process.Kill(); err != nil {
+			// 进程可能已经退出，忽略错误
+			fmt.Fprintf(os.Stderr, "Note: process kill returned: %v (may have already exited)\n", err)
+		}
+	}
+
+	// 清理临时文件（无论任务状态如何）
+	if tempFilePath != "" {
+		if err := os.Remove(tempFilePath); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to remove temp file %s: %v\n", tempFilePath, err)
+		}
+	}
 
 	fmt.Fprintf(os.Stderr, "Background task %s killed successfully\n", args.ShellID)
 
@@ -372,13 +462,14 @@ func (s *MCPServer) KillShellHandler(ctx context.Context, req *mcp.CallToolReque
 
 // executeBackgroundCommand 执行后台命令
 func (s *MCPServer) executeBackgroundCommand(task *BackgroundTask, timeout int) {
-	// 设置默认超时如果未指定
-	if timeout <= 0 {
-		timeout = 30000 // 默认30秒
-	}
+	// 后台任务不应该有超时限制（timeout参数保留用于兼容性，但设为0表示无限制）
+	// 用户可以通过 kill_shell 工具手动终止任务
 
-	// 创建临时文件来存储输出
-	tempFile, err := os.CreateTemp("", "bash_output_*.txt")
+	// 创建可取消的context（不设置超时）
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// 创建临时文件来存储输出（使用更具描述性的前缀）
+	tempFile, err := os.CreateTemp("", "mcp_bash_output_*.txt")
 	if err != nil {
 		s.mutex.Lock()
 		task.Status = "failed"
@@ -386,183 +477,242 @@ func (s *MCPServer) executeBackgroundCommand(task *BackgroundTask, timeout int) 
 		s.mutex.Unlock()
 		return
 	}
-	task.TempFile = tempFile.Name()
-	// 注意：临时文件清理在任务完成后由KillShellHandler或TearDownSuite处理
 
-	// 创建带超时的context
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
-	defer cancel()
+	// 获取Shell执行器的首选Shell路径
+	shellPath := "powershell" // 默认值
+	if shellExec, ok := s.shellExecutor.(*executor.ShellExecutor); ok {
+		if path := shellExec.GetShellPath(shellExec.GetPreferredShell()); path != "" {
+			shellPath = path
+		}
+	}
+
+	// 在goroutine外部创建cmd，以便超时处理时能访问
+	cmd := exec.CommandContext(ctx, shellPath, "-Command", task.Command)
+
+	// 加锁保护任务字段赋值
+	s.mutex.Lock()
+	task.TempFile = tempFile.Name()
+	task.Cancel = cancel
+	s.mutex.Unlock()
 
 	// 使用同步机制保护文件写入
-	var writeMutex sync.Mutex
-	
+	writeMutex := sync.Mutex{}
+
 	// 启动命令并实时写入临时文件
 	done := make(chan struct {
-		err error
+		err      error
 		exitCode int
 	}, 1)
-	
+
 	// 使用WaitGroup等待所有goroutine完成
 	var wg sync.WaitGroup
-	
-	go func() {
-		var cmd *exec.Cmd
-		if strings.Contains(strings.ToLower(task.Command), "powershell") {
-			cmd = exec.CommandContext(ctx, "powershell", "-Command", task.Command)
-		} else {
-			cmd = exec.CommandContext(ctx, "cmd", "/C", task.Command)
-		}
 
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			done <- struct {
-				err error
-				exitCode int
-			}{fmt.Errorf("failed to create stdout pipe: %w", err), 1}
-			return
-		}
+	go s.executeCommandWithTask(cmd, task, tempFile, &writeMutex, &wg, done)
 
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			done <- struct {
-				err error
-				exitCode int
-			}{fmt.Errorf("failed to create stderr pipe: %w", err), 1}
-			return
-		}
-
-		if err := cmd.Start(); err != nil {
-			done <- struct {
-				err error
-				exitCode int
-			}{fmt.Errorf("failed to start command: %w", err), 1}
-			return
-		}
-
-		// 读取stdout
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			scanner := bufio.NewScanner(stdout)
-			for scanner.Scan() {
-				line := scanner.Text()
-				// 使用互斥锁保护文件写入
-				writeMutex.Lock()
-				if _, err := tempFile.WriteString(line + "\n"); err != nil {
-					// 记录写入错误但继续执行
-					fmt.Fprintf(os.Stderr, "Failed to write to temp file: %v\n", err)
-				}
-				tempFile.Sync() // 确保内容被写入磁盘
-				writeMutex.Unlock()
-			}
-		}()
-
-		// 读取stderr
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			scanner := bufio.NewScanner(stderr)
-			for scanner.Scan() {
-				line := scanner.Text()
-				// 使用互斥锁保护文件写入
-				writeMutex.Lock()
-				if _, err := tempFile.WriteString("ERROR: " + line + "\n"); err != nil {
-					// 记录写入错误但继续执行
-					fmt.Fprintf(os.Stderr, "Failed to write to temp file: %v\n", err)
-				}
-				tempFile.Sync() // 确保内容被写入磁盘
-				writeMutex.Unlock()
-			}
-		}()
-
-		// 等待命令完成
-		err = cmd.Wait()
-		var finalExitCode int
-		if cmd.ProcessState != nil {
-			finalExitCode = cmd.ProcessState.ExitCode()
-		} else {
-			finalExitCode = -1
-		}
-		
-		// 等待所有输出goroutine完成
-		wg.Wait()
-		
-		done <- struct {
-			err error
-			exitCode int
-		}{err, finalExitCode}
-	}()
-
-	// 等待命令完成或超时
+	// 等待命令完成（后台任务无超时限制）
 	select {
 	case result := <-done:
-		execErr := result.err
-		actualExitCode := result.exitCode
-		// 命令完成，关闭临时文件
-		tempFile.Close()
-		
-		// 读取完整的输出内容
-		outputContent, readErr := os.ReadFile(task.TempFile)
-		if readErr != nil {
-			s.mutex.Lock()
-			task.Status = "failed"
-			task.Error = fmt.Sprintf("Failed to read output file: %v", readErr)
-			exitCode := -1
-			task.ExitCode = &exitCode
-			s.mutex.Unlock()
-			return
-		}
-
-		s.mutex.Lock()
-		task.Output = string(outputContent)
-		if execErr != nil {
-			task.Status = "failed"
-			task.Error = execErr.Error()
-		} else {
-			task.Status = "completed"
-		}
-		task.ExitCode = &actualExitCode
-		s.mutex.Unlock()
-
+		cancel() // 命令完成后取消context
+		s.handleCommandCompletion(task, result, tempFile)
 	case <-ctx.Done():
-		// 超时，强制终止进程
-		// 等待所有输出goroutine完成后再关闭文件
-		wg.Wait()
-		tempFile.Close()
-		
-		s.mutex.Lock()
-		task.Status = "failed"
-		task.Error = fmt.Sprintf("Command timed out after %dms", timeout)
-		exitCode := 1 // 超时通常表示失败
-		task.ExitCode = &exitCode
-		
-		// 读取已有的输出
-		outputContent, _ := os.ReadFile(task.TempFile)
-		if len(outputContent) > 0 {
-			task.Output = string(outputContent)
-		}
-		s.mutex.Unlock()
+		// Context被取消（通过kill_shell）
+		s.handleCommandCancellation(task, cmd, tempFile, done, &wg)
 	}
 }
 
-// isDangerousCommand 检查是否为危险命令
-func isDangerousCommand(command string) bool {
-	dangerousCommands := []string{
-		"rm -rf",
-		"del /f",
-		"format",
-		"shutdown",
-		"reboot",
-		"sudo rm",
-		"> /dev/null",
+// executeCommand 执行命令并处理输出
+func (s *MCPServer) executeCommandWithTask(cmd *exec.Cmd, task *BackgroundTask, tempFile *os.File, writeMutex *sync.Mutex, wg *sync.WaitGroup, done chan<- struct {
+	err      error
+	exitCode int
+}) {
+	if cmd == nil {
+		done <- struct {
+			err      error
+			exitCode int
+		}{fmt.Errorf("failed to create command"), 1}
+		return
 	}
 
-	for _, dangerous := range dangerousCommands {
-		if strings.Contains(command, dangerous) {
-			return true
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		done <- struct {
+			err      error
+			exitCode int
+		}{fmt.Errorf("failed to create stdout pipe: %w", err), 1}
+		return
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		done <- struct {
+			err      error
+			exitCode int
+		}{fmt.Errorf("failed to create stderr pipe: %w", err), 1}
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		done <- struct {
+			err      error
+			exitCode int
+		}{fmt.Errorf("failed to start command: %w", err), 1}
+		return
+	}
+
+	// 保存进程句柄到task，以便外部可以终止进程
+	s.mutex.Lock()
+	task.Process = cmd.Process
+	s.mutex.Unlock()
+
+	// 启动输出读取goroutine
+	wg.Add(2)
+	go s.readOutputPipe(stdout, tempFile, writeMutex, wg)
+	go s.readErrorPipe(stderr, tempFile, writeMutex, wg)
+
+	// 等待命令完成
+	cmdErr := cmd.Wait()
+	finalExitCode := -1
+	if cmd.ProcessState != nil {
+		finalExitCode = cmd.ProcessState.ExitCode()
+	}
+
+	wg.Wait()
+	done <- struct {
+		err      error
+		exitCode int
+	}{cmdErr, finalExitCode}
+}
+
+// readOutputPipe 读取stdout并写入临时文件
+func (s *MCPServer) readOutputPipe(stdout io.ReadCloser, tempFile *os.File, writeMutex *sync.Mutex, wg *sync.WaitGroup) {
+	defer wg.Done()
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		writeMutex.Lock()
+		if _, err := tempFile.WriteString(line + "\n"); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to write to temp file: %v\n", err)
+		}
+		tempFile.Sync()
+		writeMutex.Unlock()
+	}
+}
+
+// readErrorPipe 读取stderr并写入临时文件
+func (s *MCPServer) readErrorPipe(stderr io.ReadCloser, tempFile *os.File, writeMutex *sync.Mutex, wg *sync.WaitGroup) {
+	defer wg.Done()
+	scanner := bufio.NewScanner(stderr)
+	for scanner.Scan() {
+		line := scanner.Text()
+		writeMutex.Lock()
+		if _, err := tempFile.WriteString("ERROR: " + line + "\n"); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to write to temp file: %v\n", err)
+		}
+		tempFile.Sync()
+		writeMutex.Unlock()
+	}
+}
+
+// handleCommandCompletion 处理命令正常完成
+func (s *MCPServer) handleCommandCompletion(task *BackgroundTask, result struct {
+	err      error
+	exitCode int
+}, tempFile *os.File) {
+	execErr := result.err
+	actualExitCode := result.exitCode
+
+	// 关闭临时文件
+	if err := tempFile.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to close temp file: %v\n", err)
+	}
+
+	// 读取完整的输出内容
+	tempFilePath := task.TempFile
+	outputContent, readErr := os.ReadFile(tempFilePath)
+	if readErr != nil {
+		s.mutex.Lock()
+		task.Status = "failed"
+		task.Error = fmt.Sprintf("Failed to read output file: %v", readErr)
+		exitCode := -1
+		task.ExitCode = &exitCode
+		task.TempFile = "" // 清除临时文件路径
+		s.mutex.Unlock()
+		// 尝试删除临时文件
+		if tempFilePath != "" {
+			os.Remove(tempFilePath)
+		}
+		return
+	}
+
+	s.mutex.Lock()
+	task.Output = string(outputContent)
+	if execErr != nil {
+		task.Status = "failed"
+		task.Error = execErr.Error()
+	} else {
+		task.Status = "completed"
+	}
+	task.ExitCode = &actualExitCode
+	task.TempFile = "" // 清除临时文件路径，表示内容已加载到内存
+	s.mutex.Unlock()
+
+	// 删除临时文件（内容已保存到task.Output）
+	if tempFilePath != "" {
+		if err := os.Remove(tempFilePath); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to remove temp file %s: %v\n", tempFilePath, err)
 		}
 	}
-	return false
+}
+
+// handleCommandCancellation 处理命令被取消（通过kill_shell）
+func (s *MCPServer) handleCommandCancellation(task *BackgroundTask, cmd *exec.Cmd, tempFile *os.File, done chan struct {
+	err      error
+	exitCode int
+}, wg *sync.WaitGroup) {
+	// 被取消，强制终止进程
+	if cmd.Process != nil {
+		cmd.Process.Kill()
+	}
+	// 等待输出 goroutine 完成后再关闭文件
+	wg.Wait()
+	// 接收 done 结果，避免 executeCommand 的发送长期占用（带短超时防止永久阻塞）
+	select {
+	case <-done:
+	case <-time.After(DoneChannelTimeout):
+	}
+	if err := tempFile.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to close temp file: %v\n", err)
+	}
+
+	// 获取临时文件路径
+	s.mutex.RLock()
+	tempFilePath := task.TempFile
+	s.mutex.RUnlock()
+
+	// 读取已有的输出
+	var outputStr string
+	if tempFilePath != "" {
+		outputContent, _ := os.ReadFile(tempFilePath)
+		if len(outputContent) > 0 {
+			outputStr = string(outputContent)
+		}
+	}
+
+	s.mutex.Lock()
+	task.Status = "killed"
+	task.Error = "Task was cancelled by user"
+	exitCode := -1
+	task.ExitCode = &exitCode
+	task.Output = outputStr
+	task.TempFile = "" // 清除临时文件路径，表示内容已加载到内存
+	s.mutex.Unlock()
+
+	// 删除临时文件（内容已保存到task.Output）
+	if tempFilePath != "" {
+		if err := os.Remove(tempFilePath); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to remove temp file %s: %v\n", tempFilePath, err)
+		}
+	}
 }
 
 // AddBashTools 注册所有bash工具 - 使用官方标准注册模式
@@ -572,7 +722,7 @@ func AddBashTools(server *mcp.Server) {
 	// 注册Bash工具 - 使用官方推荐的AddTool模式
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "bash",
-		Description: "安全执行PowerShell/CMD命令，支持前台和后台执行模式\n\n主要功能：\n• 支持PowerShell 7+和Windows CMD命令执行\n• 智能Shell环境检测，自动选择最佳Shell\n• 支持前台执行（同步等待结果）和后台执行（异步任务）\n• 必填超时时间（1-600秒）防止无限等待\n• 企业级安全验证（危险命令过滤、长度限制）\n• 完整错误处理和退出代码返回\n\n参数说明：\n• command（必填）：要执行的PowerShell/CMD命令\n• timeout（必填）：超时时间（毫秒），范围1000-600000\n• description（可选）：命令描述，用于日志记录\n• run_in_background（可选）：是否后台执行，默认false\n\n返回结果：\n• output：命令执行输出内容\n• exitCode：命令退出代码\n• killed：是否被强制终止\n• shellId：后台任务ID（仅后台执行时返回）\n\n安全限制：\n• 最大命令长度10000字符\n• 禁止危险命令（删除、格式化、关机等）\n• 自动检测和过滤恶意操作\n• timeout参数为必填项，确保命令执行时间可控",
+		Description: "安全执行PowerShell命令，支持前台和后台执行模式\n\n主要功能：\n• 仅支持PowerShell 7+和Windows PowerShell 5.x命令执行\n• 智能Shell环境检测，自动选择最佳Shell\n• 支持前台执行（同步等待结果）和后台执行（异步任务）\n• 必填超时时间（1-600秒）防止无限等待\n• 企业级安全验证（危险命令过滤、长度限制）\n• 完整错误处理和退出代码返回\n\n参数说明：\n• command（必填）：要执行的PowerShell命令\n• timeout（必填）：超时时间（毫秒），范围1000-600000\n• description（可选）：命令描述，用于日志记录\n• run_in_background（可选）：是否后台执行，默认false\n\n返回结果：\n• output：命令执行输出内容\n• exitCode：命令退出代码\n• killed：是否被强制终止\n• shellId：后台任务ID（仅后台执行时返回）\n\n安全限制：\n• 最大命令长度10000字符\n• 禁止危险命令（删除、格式化、关机等）\n• 自动检测和过滤恶意操作\n• timeout参数为必填项，确保命令执行时间可控",
 	}, bashServer.BashHandler)
 
 	// 注册BashOutput工具
@@ -594,52 +744,52 @@ func main() {
 		Name:    "mcp-bash-tools",
 		Version: "1.0.0",
 	}, &mcp.ServerOptions{
-		Instructions: `🚀 MCP Bash Tools Server - Windows专用安全命令执行服务器
+		Instructions: `MCP Bash Tools Server - Windows专用安全命令执行服务器
 
 功能特性：
-• 🔒 企业级安全验证 - 多层安全检查防止恶意命令执行
-• ⚡ 支持前台/后台执行模式 - 灵活的任务管理
-• 📊 实时输出监控 - 后台任务输出实时获取
-• 🎯 正则过滤功能 - 精确筛选输出内容
-• 🛡️ 资源限制保护 - 防止系统资源滥用
+- 企业级安全验证 - 多层安全检查防止恶意命令执行
+- 支持前台/后台执行模式 - 灵活的任务管理
+- 实时输出监控 - 后台任务输出实时获取
+- 正则过滤功能 - 精确筛选输出内容
+- 资源限制保护 - 防止系统资源滥用
 
 可用工具：
-• bash - 执行PowerShell/CMD命令
-• bash_output - 获取后台任务输出
-• kill_shell - 终止后台任务
+- bash - 执行PowerShell命令
+- bash_output - 获取后台任务输出
+- kill_shell - 终止后台任务
 
 安全限制：
-• 禁止危险命令（rm -rf, format, shutdown等）
-• 命令长度限制（最大10000字符）
-• 超时保护（默认30秒，最大600秒）`,
+- 禁止危险命令（rm -rf, format, shutdown等）
+- 命令长度限制（最大10000字符）
+- 超时保护（默认30秒，最大600秒）`,
 	})
 
 	// 打印启动信息
-	fmt.Fprintf(os.Stderr, "🚀 MCP Bash Tools Server starting...\n")
-	fmt.Fprintf(os.Stderr, "📋 Server Information:\n")
-	fmt.Fprintf(os.Stderr, "   • Name: %s\n", "mcp-bash-tools")
-	fmt.Fprintf(os.Stderr, "   • Version: %s\n", "1.0.0")
+	fmt.Fprintf(os.Stderr, "MCP Bash Tools Server starting...\n")
+	fmt.Fprintf(os.Stderr, "Server Information:\n")
+	fmt.Fprintf(os.Stderr, "   Name: %s\n", "mcp-bash-tools")
+	fmt.Fprintf(os.Stderr, "   Version: %s\n", "1.0.0")
 	fmt.Fprintln(os.Stderr)
-	
+
 	// 创建并初始化Shell执行器
 	bashServer := NewMCPServer()
-	fmt.Fprintf(os.Stderr, "🔧 Shell Environment Information:\n")
+	fmt.Fprintf(os.Stderr, "Shell Environment Information:\n")
 	bashServer.shellExecutor.PrintShellInfo()
 	fmt.Fprintln(os.Stderr)
 
 	// 注册所有bash工具
-	fmt.Fprintf(os.Stderr, "📦 Registering MCP tools...\n")
+	fmt.Fprintf(os.Stderr, "Registering MCP tools...\n")
 	AddBashTools(server)
-	fmt.Fprintf(os.Stderr, "✅ Tools registered successfully:\n")
-	fmt.Fprintf(os.Stderr, "   • bash - Execute PowerShell/CMD commands\n")
-	fmt.Fprintf(os.Stderr, "   • bash_output - Get background task output\n")
-	fmt.Fprintf(os.Stderr, "   • kill_shell - Terminate background tasks\n")
+	fmt.Fprintf(os.Stderr, "Tools registered successfully:\n")
+	fmt.Fprintf(os.Stderr, "   - bash - Execute PowerShell commands\n")
+	fmt.Fprintf(os.Stderr, "   - bash_output - Get background task output\n")
+	fmt.Fprintf(os.Stderr, "   - kill_shell - Terminate background tasks\n")
 	fmt.Fprintln(os.Stderr)
 
 	// 启动服务器 - 使用官方标准启动方式
-	fmt.Fprintf(os.Stderr, "🌟 Starting MCP server with stdio transport...\n")
+	fmt.Fprintf(os.Stderr, "Starting MCP server with stdio transport...\n")
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Server failed to start: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Server failed to start: %v\n", err)
 		os.Exit(1)
 	}
 }

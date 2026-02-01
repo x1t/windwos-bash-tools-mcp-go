@@ -19,8 +19,8 @@ func NewLogger() *Logger {
 		TimestampFormat: "2006-01-02 15:04:05",
 	})
 	
-	// 设置输出到标准输出
-	log.SetOutput(os.Stdout)
+	// 设置输出到标准错误输出（MCP协议要求stdout专用于JSON-RPC通信）
+	log.SetOutput(os.Stderr)
 	
 	// 设置日志级别
 	log.SetLevel(logrus.InfoLevel)

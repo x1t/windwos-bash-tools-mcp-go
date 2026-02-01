@@ -13,15 +13,15 @@ import (
 const (
 	STD_OUTPUT_HANDLE = ^uint32(0) - 11
 	STD_ERROR_HANDLE  = ^uint32(0) - 12
-	
+
 	ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
-	
+
 	CP_UTF8 = 65001
 )
 
 var (
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
-	
+
 	procGetConsoleMode      = kernel32.NewProc("GetConsoleMode")
 	procSetConsoleMode      = kernel32.NewProc("SetConsoleMode")
 	procGetStdHandle        = kernel32.NewProc("GetStdHandle")
@@ -45,7 +45,7 @@ func NewOptimizedCommandExecutor() *OptimizedCommandExecutor {
 func (oce *OptimizedCommandExecutor) initializeConsole() {
 	// 设置UTF-8编码
 	oce.setUTF8Encoding()
-	
+
 	// 启用虚拟终端处理
 	oce.enableVirtualTerminal()
 }
@@ -74,92 +74,42 @@ func (oce *OptimizedCommandExecutor) enableVirtualTerminal() {
 	oce.enableVTProcessing = true
 }
 
-// ExecuteCommandWithOptimization 执行Windows优化命令
+// ExecuteCommandWithOptimization 执行PowerShell优化命令
 func (oce *OptimizedCommandExecutor) ExecuteCommandWithOptimization(command string, workDir string) (*exec.Cmd, error) {
-	// 检测命令类型并选择最佳执行方式
-	var cmd *exec.Cmd
-	
-	commandLower := strings.ToLower(command)
-	
-	switch {
-	case strings.Contains(commandLower, "powershell"):
-		// PowerShell命令优化
-		cmd = exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command)
-		
-	case strings.Contains(commandLower, "git"):
-		// Git命令优化
-		if oce.isGitBashAvailable() {
-			cmd = exec.Command("bash", "-c", command)
-		} else {
-			cmd = exec.Command("cmd", "/C", command)
-		}
-		
-	case strings.HasPrefix(commandLower, "dir ") || strings.HasPrefix(commandLower, "type "):
-		// Windows原生命令
-		cmd = exec.Command("cmd", "/C", command)
-		
-	default:
-		// 默认使用cmd
-		cmd = exec.Command("cmd", "/C", command)
-	}
-	
+	// 使用PowerShell执行命令
+	cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command)
+
 	// 设置工作目录
 	if workDir != "" {
 		if absPath, err := filepath.Abs(workDir); err == nil {
 			cmd.Dir = absPath
 		}
 	}
-	
+
 	// 设置环境变量优化
 	oce.setupEnvironment(cmd)
-	
+
 	return cmd, nil
 }
 
 // setupEnvironment 设置执行环境
 func (oce *OptimizedCommandExecutor) setupEnvironment(cmd *exec.Cmd) {
 	cmd.Env = append(cmd.Env, os.Environ()...)
-	
+
 	// Windows特定环境变量
 	cmd.Env = append(cmd.Env,
 		"PROMPT=$P$G",
 		"TERM=xterm-256color",
 	)
-	
+
 	if oce.utf8Enabled {
 		cmd.Env = append(cmd.Env, "PYTHONIOENCODING=utf-8")
 	}
 }
 
-// isGitBashAvailable 检查Git Bash是否可用
-func (oce *OptimizedCommandExecutor) isGitBashAvailable() bool {
-	// 检查常见的Git Bash安装路径
-	gitBashPaths := []string{
-		"C:\\Program Files\\Git\\bin\\bash.exe",
-		"C:\\Program Files (x86)\\Git\\bin\\bash.exe",
-		"C:\\msys64\\usr\\bin\\bash.exe",
-	}
-	
-	for _, path := range gitBashPaths {
-		if _, err := os.Stat(path); err == nil {
-			return true
-		}
-	}
-	
-	// 检查PATH中是否有bash
-	if _, err := exec.LookPath("bash"); err == nil {
-		return true
-	}
-	
-	return false
-}
-
 // GetOptimalShell 获取最优的Shell环境
 func (oce *OptimizedCommandExecutor) GetOptimalShell() string {
-	if oce.isGitBashAvailable() {
-		return "bash"
-	}
-	return "cmd"
+	return "powershell"
 }
 
 // OptimizePath 优化Windows路径
@@ -168,17 +118,17 @@ func OptimizePath(path string) string {
 	if absPath, err := filepath.Abs(path); err == nil {
 		path = absPath
 	}
-	
+
 	// 转换正斜杠为反斜杠
 	path = filepath.FromSlash(path)
-	
+
 	// 处理长路径
 	if len(path) > 260 {
 		if !strings.HasPrefix(path, "\\\\?\\") {
 			path = "\\\\?\\" + path
 		}
 	}
-	
+
 	return path
 }
 
@@ -198,18 +148,18 @@ type WindowsInfo struct {
 
 func GetWindowsInfo() WindowsInfo {
 	info := WindowsInfo{}
-	
-	// 使用ver命令获取Windows版本
-	if cmd := exec.Command("cmd", "/C", "ver"); cmd != nil {
+
+	// 使用PowerShell获取Windows版本
+	if cmd := exec.Command("powershell", "-Command", "(Get-CimInstance Win32_OperatingSystem).Version"); cmd != nil {
 		if output, err := cmd.CombinedOutput(); err == nil {
 			info.Version = strings.TrimSpace(string(output))
 		}
 	}
-	
+
 	// 获取系统架构
 	info.Architecture = os.Getenv("PROCESSOR_ARCHITECTURE")
 	info.ProcessorInfo = os.Getenv("PROCESSOR_IDENTIFIER")
-	
+
 	return info
 }
 

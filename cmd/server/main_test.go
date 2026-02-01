@@ -21,13 +21,11 @@ type BashHandlerTestSuite struct {
 // SetupSuite 测试套件初始化
 func (suite *BashHandlerTestSuite) SetupSuite() {
 	suite.server = NewMCPServer()
-	// 创建一个简单的ShellExecutor来避免实际执行命令
 	suite.server.shellExecutor = &MockShellExecutor{}
 }
 
 // TearDownSuite 测试套件清理
 func (suite *BashHandlerTestSuite) TearDownSuite() {
-	// 清理所有后台任务
 	suite.server.mutex.Lock()
 	defer suite.server.mutex.Unlock()
 	suite.server.backgroundTasks = make(map[string]*BackgroundTask)
@@ -35,20 +33,15 @@ func (suite *BashHandlerTestSuite) TearDownSuite() {
 
 // TestBashHandler_EmptyCommand 测试空命令错误
 func (suite *BashHandlerTestSuite) TestBashHandler_EmptyCommand() {
-	// 准备测试数据
 	args := BashArguments{
 		Command: "",
 		Timeout: 5000,
 	}
 
-	// 执行测试 - 根据官方MCP标准，工具错误返回nil + 结构化输出
 	result, output, err := suite.server.BashHandler(context.Background(), &mcp.CallToolRequest{}, args)
 
-	// 验证结果
 	require.Error(suite.T(), err)
-	assert.Contains(suite.T(), err.Error(), "command参数是必需的")
-	
-	// 工具错误时result为nil，输出结构体包含错误信息
+	assert.Contains(suite.T(), err.Error(), "command is required")
 	assert.Nil(suite.T(), result)
 	assert.Equal(suite.T(), 1, output.ExitCode)
 }
@@ -60,8 +53,8 @@ func (suite *BashHandlerTestSuite) TestBashHandler_InvalidTimeout() {
 		timeout  int
 		expected string
 	}{
-		{"超时时间过短", 500, "timeout必须在1000到600000毫秒之间"},
-		{"超时时间过长", 700000, "timeout必须在1000到600000毫秒之间"},
+		{"timeout too short", 500, "timeout must be between 1000 and 600000"},
+		{"timeout too long", 700000, "timeout must be between 1000 and 600000"},
 	}
 
 	for _, tt := range tests {
@@ -75,28 +68,26 @@ func (suite *BashHandlerTestSuite) TestBashHandler_InvalidTimeout() {
 
 			require.Error(suite.T(), err)
 			assert.Contains(suite.T(), err.Error(), tt.expected)
-			
-			// 根据官方MCP标准，工具错误时result为nil
 			assert.Nil(suite.T(), result)
 			assert.Equal(suite.T(), 1, output.ExitCode)
 		})
 	}
 }
 
-// TestBashHandler_DangerousCommand 测试危险命令拦截
+// TestBashHandler_DangerousCommand 测试危险命令拦截（Windows专用）
 func (suite *BashHandlerTestSuite) TestBashHandler_DangerousCommand() {
+	// 仅测试Windows危险命令（已移除Linux命令如 rm -rf /）
 	dangerousCommands := []string{
-		"rm -rf /",
-		"del /f C:\\*.*",
+		"del /s C:\\Windows",
 		"format C:",
 		"shutdown /s",
 		"reboot",
-		"sudo rm -rf",
-		"> /dev/null",
+		"rd /s /q C:\\",
+		"diskpart",
 	}
 
 	for _, cmd := range dangerousCommands {
-		suite.Run("危险命令: "+cmd, func() {
+		suite.Run("dangerous: "+cmd, func() {
 			args := BashArguments{
 				Command: cmd,
 				Timeout: 5000,
@@ -105,9 +96,7 @@ func (suite *BashHandlerTestSuite) TestBashHandler_DangerousCommand() {
 			result, output, err := suite.server.BashHandler(context.Background(), &mcp.CallToolRequest{}, args)
 
 			require.Error(suite.T(), err)
-			assert.Contains(suite.T(), err.Error(), "命令因安全原因被拒绝")
-			
-			// 根据官方MCP标准，工具错误时result为nil
+			assert.Contains(suite.T(), err.Error(), "command rejected for security reasons")
 			assert.Nil(suite.T(), result)
 			assert.Equal(suite.T(), 1, output.ExitCode)
 		})
@@ -122,23 +111,19 @@ func (suite *BashHandlerTestSuite) TestBashHandler_BackgroundExecution() {
 		Timeout:         5000,
 	}
 
-	// 根据官方MCP标准，成功操作返回nil作为CallToolResult
 	result, output, err := suite.server.BashHandler(context.Background(), &mcp.CallToolRequest{}, args)
 
 	require.NoError(suite.T(), err)
-	// 成功操作返回nil，结构化输出在第二个返回值中
 	assert.Nil(suite.T(), result)
 	assert.Equal(suite.T(), 0, output.ExitCode)
 	assert.NotEmpty(suite.T(), output.ShellID)
 	assert.True(suite.T(), strings.HasPrefix(output.ShellID, "bash_"))
 
-	// 验证后台任务已被创建
 	suite.server.mutex.RLock()
 	_, exists := suite.server.backgroundTasks[output.ShellID]
 	suite.server.mutex.RUnlock()
-	assert.True(suite.T(), exists, "后台任务应该被创建")
+	assert.True(suite.T(), exists, "background task should be created")
 
-	// 清理
 	suite.server.mutex.Lock()
 	delete(suite.server.backgroundTasks, output.ShellID)
 	suite.server.mutex.Unlock()
@@ -152,11 +137,9 @@ func (suite *BashHandlerTestSuite) TestBashHandler_ForegroundExecution() {
 		Timeout:         5000,
 	}
 
-	// 根据官方MCP标准，成功操作返回nil作为CallToolResult
 	result, output, err := suite.server.BashHandler(context.Background(), &mcp.CallToolRequest{}, args)
 
 	require.NoError(suite.T(), err)
-	// 成功操作返回nil，结构化输出在第二个返回值中
 	assert.Nil(suite.T(), result)
 	assert.Equal(suite.T(), 0, output.ExitCode)
 	assert.False(suite.T(), output.Killed)
@@ -174,14 +157,13 @@ func (suite *BashHandlerTestSuite) TestBashHandler_ConcurrentBackgroundTasks() {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			
+
 			args := BashArguments{
 				Command:         "echo Task " + string(rune('A'+index)),
 				RunInBackground: true,
 				Timeout:         5000,
 			}
 
-			// 根据官方MCP标准，成功操作返回nil
 			result, output, err := suite.server.BashHandler(context.Background(), &mcp.CallToolRequest{}, args)
 
 			assert.NoError(suite.T(), err)
@@ -196,17 +178,14 @@ func (suite *BashHandlerTestSuite) TestBashHandler_ConcurrentBackgroundTasks() {
 
 	wg.Wait()
 
-	// 验证所有任务都被创建
-	assert.Len(suite.T(), taskIDs, numTasks, "应该创建指定数量的后台任务")
+	assert.Len(suite.T(), taskIDs, numTasks, "should create specified number of tasks")
 
-	// 验证所有任务ID都是唯一的
 	uniqueIDs := make(map[string]bool)
 	for _, id := range taskIDs {
-		assert.False(suite.T(), uniqueIDs[id], "任务ID应该是唯一的: %s", id)
+		assert.False(suite.T(), uniqueIDs[id], "task ID should be unique: %s", id)
 		uniqueIDs[id] = true
 	}
 
-	// 清理
 	suite.server.mutex.Lock()
 	for _, id := range taskIDs {
 		delete(suite.server.backgroundTasks, id)
@@ -218,12 +197,10 @@ func (suite *BashHandlerTestSuite) TestBashHandler_ConcurrentBackgroundTasks() {
 func (suite *BashHandlerTestSuite) TestBashHandler_DescriptionLogging() {
 	args := BashArguments{
 		Command:     "echo test",
-		Description: "测试命令描述",
+		Description: "test description",
 		Timeout:     5000,
 	}
 
-	// 这里我们无法直接测试日志输出，但可以验证参数被正确处理
-	// 根据官方MCP标准，成功操作返回nil
 	result, output, err := suite.server.BashHandler(context.Background(), &mcp.CallToolRequest{}, args)
 
 	require.NoError(suite.T(), err)
@@ -231,62 +208,18 @@ func (suite *BashHandlerTestSuite) TestBashHandler_DescriptionLogging() {
 	assert.NotNil(suite.T(), output)
 }
 
-// MockShellExecutor 模拟Shell执行器
-type MockShellExecutor struct{}
-
-// ExecuteCommand 模拟命令执行
-func (m *MockShellExecutor) ExecuteCommand(command string, timeout int) (string, int, error) {
-	// 模拟成功执行
-	return "Mock output: " + command, 0, nil
-}
-
-// PrintShellInfo 模拟Shell信息打印
-func (m *MockShellExecutor) PrintShellInfo() {
-	// 什么都不做
-}
-
 // 运行BashHandler测试套件
 func TestBashHandlerTestSuite(t *testing.T) {
 	suite.Run(t, new(BashHandlerTestSuite))
 }
 
-// 单独的基准测试
-func BenchmarkBashHandler_ValidCommand(b *testing.B) {
-	server := NewMCPServer()
-	// 不设置模拟执行器，使用默认的
-	args := BashArguments{
-		Command: "echo benchmark test",
-		Timeout: 5000,
-	}
+// MockShellExecutor 模拟Shell执行器
+type MockShellExecutor struct{}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _, err := server.BashHandler(context.Background(), &mcp.CallToolRequest{}, args)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
+// ExecuteCommand 模拟命令执行
+func (m *MockShellExecutor) ExecuteCommand(command string, timeout int) (string, int, error) {
+	return "Mock output: " + command, 0, nil
 }
 
-func BenchmarkBashHandler_BackgroundTask(b *testing.B) {
-	server := NewMCPServer()
-	
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		args := BashArguments{
-			Command:         "echo background task " + string(rune(i)),
-			RunInBackground: true,
-			Timeout:         5000,
-		}
-		
-		_, _, err := server.BashHandler(context.Background(), &mcp.CallToolRequest{}, args)
-		if err != nil {
-			b.Fatal(err)
-		}
-		
-		// 清理任务以避免内存泄漏
-		server.mutex.Lock()
-		server.backgroundTasks = make(map[string]*BackgroundTask)
-		server.mutex.Unlock()
-	}
-}
+// PrintShellInfo 模拟Shell信息打印
+func (m *MockShellExecutor) PrintShellInfo() {}

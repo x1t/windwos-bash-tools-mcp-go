@@ -35,6 +35,7 @@
 - [🔧 构建和部署](#-构建和部署)
 - [📊 性能指标](#-性能指标)
 - [🔍 故障排除](#-故障排除)
+- [📚 详细文档](#-详细文档)
 - [🤝 贡献指南](#-贡献指南)
 - [📄 许可证](#-许可证)
 
@@ -50,18 +51,17 @@
 | **⚡ 前台/后台模式**  | 同步执行与异步任务管理                           | ✅ 稳定   |
 | **🎯 智能超时控制**   | 1-600秒范围，自动终止超时任务                    | ✅ 完善   |
 | **📊 实时输出监控**   | 临时文件存储，正则表达式过滤                     | ✅ 高效   |
-| **🔧 多Shell支持**    | PowerShell 7 → Git Bash → PowerShell 5+ → CMD | ✅ 智能   |
+| **🔧 多Shell支持**    | PowerShell 7 → PowerShell 5+ | ✅ 智能   |
 
 ### 🏢 企业级特性
 
 | 特性                      | 描述                           | 实现方式          |
 | :------------------------ | :----------------------------- | :---------------- |
-| **🔐 权限控制**     | JWT认证 + RBAC权限控制         | Token-based Auth  |
-| **📝 审计日志**     | 结构化日志记录，安全事件追踪   | Logrus + Custom   |
+| **📝 审计日志**     | 结构化日志记录，安全事件追踪   | stderr输出        |
 | **🚫 危险命令过滤** | 70+种危险模式，实时威胁识别    | Regex + Context   |
-| **⚖️ 资源限制**   | CPU 80%                        | 内存512MB         |
+| **⚖️ 资源限制**   | 超时控制（1-600秒）            | Context Timeout   |
 | **🔄 任务管理**     | 50个并发任务，sync.RWMutex安全 | Goroutine + Mutex |
-| **🏗️ 沙箱隔离**   | 可选沙箱执行环境，工作目录隔离 | Process Isolation |
+| **🏗️ 沙箱隔离**   | 工作目录隔离，临时文件管理     | Process Isolation |
 
 ---
 
@@ -129,7 +129,6 @@ Get-Item dist\bash-tools.exe
 🔧 检测到的Shell环境:
 1. pwsh: C:\Program Files\PowerShell\7\pwsh.exe ✅ (首选)
 2. powershell: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe ✅
-3. cmd: C:\Windows\system32\cmd.exe ✅
 ```
 
 ### 🧪 快速测试
@@ -158,14 +157,19 @@ Hello, MCP Bash Tools!
 
 ### ⚡ Bash工具 - 主要命令执行
 
-**功能**: 安全执行PowerShell/CMD命令
+**功能**: 安全执行PowerShell命令
+
+**超时行为**:
+- **前台执行**: 如果命令在timeout时间内完成，立即返回结果
+- **前台超时**: 如果命令超过timeout时间，**自动转为后台任务**，返回任务ID，命令继续执行
+- **后台执行**: 无超时限制，持续运行直到完成或被手动终止
 
 **参数**:
 
 | 参数                  | 类型    | 必填 | 默认值 | 描述                        |
 | :-------------------- | :------ | :--- | :----- | :-------------------------- |
 | `command`           | string  | ✅   | -      | 要执行的命令                |
-| `timeout`           | number  | ❌   | 30000  | 超时时间(毫秒)，1000-600000 |
+| `timeout`           | number  | ✅   | -      | 超时时间(毫秒)，1000-600000 |
 | `description`       | string  | ❌   | -      | 命令描述                    |
 | `run_in_background` | boolean | ✅   | false  | 是否后台执行                |
 
@@ -176,9 +180,14 @@ Hello, MCP Bash Tools!
   "output": "命令输出内容",
   "exitCode": 0,
   "killed": false,
-  "shellId": "bash_1701234567890123456"  // 仅后台模式
+  "shellId": "bash_1701234567890123456"  // 后台模式或前台超时时返回
 }
 ```
+
+**使用场景**:
+- **快速命令**: `run_in_background=false`, `timeout=5000` - 5秒内完成的命令
+- **长时间任务**: `run_in_background=true` - 编译、部署、长时间测试
+- **自动转后台**: 前台命令超时后自动转后台，不会被终止
 
 ### 📊 BashOutput工具 - 实时输出监控
 
@@ -256,10 +265,9 @@ Hello, MCP Bash Tools!
 | 组件                 | 文件                                 | 行数 | 主要功能                         |
 | :------------------- | :----------------------------------- | :--- | :------------------------------- |
 | **MCP服务器**  | `cmd/server/main.go`               | 646  | 工具注册、任务管理、JSON-RPC通信 |
-| **安全执行器** | `internal/executor/secure_bash.go` | 558  | 沙箱隔离、资源限制、实时监控     |
 | **Shell管理**  | `internal/executor/shell.go`       | 185  | 智能Shell检测、环境优化          |
-| **安全管理**   | `internal/security/security.go`    | 561  | JWT认证、RBAC、速率限制          |
-| **命令验证**   | `internal/security/validator.go`   | 213  | 70+危险模式识别                  |
+| **安全验证**   | `internal/security/validator.go`   | 213  | 70+危险模式识别（Windows专用）   |
+| **命令执行**   | `internal/executor/bash.go`        | 200  | PowerShell命令执行、超时控制     |
 
 ### 🔄 并发安全机制
 
@@ -272,24 +280,23 @@ Hello, MCP Bash Tools!
 
 ## 🛡️ 安全机制
 
-### 🏯 六层安全防护体系
+### 🏯 多层安全防护体系
 
 1. **🔍 输入验证层** - 参数类型检查、长度验证、特殊字符过滤
-2. **🔐 认证授权层** - JWT Token验证、RBAC权限控制、会话管理
-3. **⚖️ 限流保护层** - Token Bucket算法、10 RPS/20 Burst、IP级别限流
-4. **🔍 命令验证层** - 70+危险模式检测、正则表达式匹配、上下文分析
-5. **📦 沙箱隔离层** - 工作目录限制、资源配额、网络访问控制
-6. **📊 监控审计层** - 实时状态监控、安全事件记录、异常行为检测
+2. **🔍 命令验证层** - 70+危险模式检测、正则表达式匹配、上下文分析
+3. **📦 执行隔离层** - 工作目录限制、临时文件管理
+4. **⏱️ 超时保护层** - 强制超时控制（1-600秒），防止无限等待
+5. **📊 监控审计层** - 实时状态监控、命令执行记录
 
-### ⚠️ 危险命令分类
+### ⚠️ 危险命令分类 (Windows专用)
 
 | 类别               | 示例                                               | 检测方式   |
 | :----------------- | :------------------------------------------------- | :--------- |
-| **系统破坏** | `rm -rf /`, `format C:`, `dd if=/dev/zero`   | 正则匹配   |
+| **系统破坏** | `del /s`, `format C:`, `diskpart`            | 正则匹配   |
 | **系统控制** | `shutdown`, `reboot`, `Stop-Computer`        | 命令黑名单 |
-| **权限提升** | `sudo su`, `passwd`, `net localgroup`        | 权限检测   |
-| **网络攻击** | `iptables -F`, `nc -l`, `Test-NetConnection` | 网络监控   |
-| **资源消耗** | Fork bomb, 无限循环, 磁盘写满                      | 模式识别   |
+| **权限提升** | `takeown`, `net user /add`, `icacls`         | 权限检测   |
+| **网络攻击** | `net use`, `net session`, `bitsadmin`        | 网络监控   |
+| **恶意下载** | `downloadstring`, `certutil -urlcache`       | 模式识别   |
 
 ### ✅ 安全命令示例
 
@@ -492,6 +499,26 @@ go test -race ./...
 | **CPU使用率**    | < 80%   | < 90%   | 🏆 优秀 |
 | **输出延迟**     | < 50ms  | < 100ms | 🏆 优秀 |
 | **安全验证时间** | < 20ms  | < 50ms  | 🏆 优秀 |
+
+---
+
+## 📚 详细文档
+
+### 📖 核心文档
+- [开发指南 (CLAUDE.md)](./CLAUDE.md) - 开发者必读，包含架构设计和最佳实践
+- [改进记录 (IMPROVEMENTS.md)](./IMPROVEMENTS.md) - 项目改进历史
+
+### 🔍 审计报告
+- [生产就绪性审计总结](./docs/FINAL_AUDIT_SUMMARY.md) - **总体评分 96/100** ⭐⭐⭐⭐⭐
+- [完整审计报告](./docs/PRODUCTION_READINESS_AUDIT.md) - 深度代码审查和安全评估
+- [测试结果报告](./docs/TEST_RESULTS.md) - 前台超时转后台功能验证
+
+### 📋 技术参考
+- [MCP协议规范](./docs/stdio-tools.md) - 标准I/O工具接口
+- [超时实现方法](./docs/timeout.md) - PowerShell超时最佳实践
+- [类型定义](./docs/todo.md) - TypeScript接口定义
+
+**更多文档**: 查看 [docs/INDEX.md](./docs/INDEX.md) 获取完整文档列表
 
 ---
 

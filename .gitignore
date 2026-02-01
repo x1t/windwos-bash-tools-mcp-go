@@ -126,11 +126,7 @@ $RECYCLE.BIN/
 .LSOverride
 Icon
 
-# Linux
-.nfs*
-*~
-
-# 通用临时文件
+# macOS
 *.tmp
 *.temp
 *.bak
