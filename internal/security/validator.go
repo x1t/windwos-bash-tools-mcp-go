@@ -7,108 +7,48 @@ import (
 )
 
 // 危险命令模式列表 (Windows专用) - 预编译正则表达式
+// 采用黑名单策略：只拦截明确会造成系统破坏的命令
 var dangerousPatterns = []string{
-	// 系统破坏命令 (Windows)
-	`del\s+[/\\]`,
-	`rmdir\s+.*[/\\]`,
-	`rd\s+[/\\]`,
-	`format\s+[a-zA-Z]:`,
-	`fdisk`,
-	`diskpart`,
+	// 系统破坏命令 (Windows) - 只拦截带破坏性参数的
+	`del\s+[/\\]f.*[/\\]s`, // del /f /s (递归强制删除)
+	`del\s+[/\\]s.*[/\\]f`, // del /s /f
+	`rmdir\s+[/\\]s`,       // rmdir /s (递归删除目录)
+	`rd\s+[/\\]s`,          // rd /s
+	`format\s+[a-zA-Z]:`,   // format C: (格式化磁盘)
+	`fdisk`,                // fdisk (磁盘分区)
+	`diskpart`,             // diskpart (磁盘管理)
 
-	// 系统控制命令
-	`shutdown`,
-	`reboot`,
-	`restart`,
-	`logoff`,
-	`taskkill\s+[/\\]f`,
-	`tsdiscon`,
-	`stop-computer`,
-	`restart-computer`,
+	// 系统控制命令 - 关机/重启
+	`shutdown\s+[/\\-]`, // shutdown /s 或 shutdown -s
+	`restart-computer`,  // PowerShell重启
+	`stop-computer`,     // PowerShell关机
 
-	// 权限提升命令
-	`takeown`,
-	`icacls.*everyone`,
-	`cacls.*everyone`,
-	`net\s+user.*\/add`,
-	`net\s+localgroup.*administrators`,
+	// 权限提升和用户管理 - 只拦截添加管理员
+	`net\s+user.*[/\\]add`,                       // 添加用户
+	`net\s+localgroup.*administrators.*[/\\]add`, // 添加到管理员组
 
-	// 网络攻击命令
-	`net\s+view`,
-	`net\s+use`,
-	`net\s+session`,
-
-	// 磁盘操作危险命令
-	`copy\s+con`,
-
-	// 系统关键文件修改
-	`echo\s+.*>\s*[a-zA-Z]:[/\\]windows`,
-	`echo\s+.*>\s*[a-zA-Z]:[/\\]system32`,
+	// 系统关键文件修改 - 只拦截Windows和System32目录
 	`del\s+.*[/\\]windows[/\\]system32`,
+	`rmdir\s+.*[/\\]windows[/\\]system32`,
+	`rd\s+.*[/\\]windows[/\\]system32`,
 
-	// 后门和恶意软件
-	`powershell.*-enc`,
-	`powershell.*-encodedcommand`,
-	`invoke-expression.*\(new-object`,
-	`iex.*\(new-object`,
-	`downloadstring`,
-	`downloadfile`,
-	`cmd\s+[/\\]c.*http`,
-	`bitsadmin`,
-	`certutil.*-urlcache`,
-	`mshta.*http`,
+	// 后门和恶意软件下载
+	`powershell.*-enc`,                  // PowerShell编码命令
+	`powershell.*-encodedcommand`,       // PowerShell编码命令
+	`invoke-expression.*downloadstring`, // 下载并执行
+	`iex.*downloadstring`,               // 下载并执行
+	`certutil.*-urlcache.*http`,         // certutil下载文件
+	`bitsadmin.*[/\\]transfer.*http`,    // bitsadmin下载
 
-	// 包管理器（防止安装恶意软件）
-	`choco\s+install`,
-	`scoop\s+install`,
-	`winget\s+install`,
-	`pip\s+install`,
-	`npm\s+install.*-g`,
-	`npm\s+install.*--global`,
-
-	// 环境变量注入
-	`setx\s+path`,
-	`set\s+path=`,
-
-	// 注册表危险操作
-	`reg\s+delete`,
-	`reg\s+add.*hklm`,
-	`reg\s+add.*hkey_local_machine`,
-	`remove-item.*hklm:`,
-	`new-item.*hklm:`,
+	// 注册表危险操作 - 只拦截删除和修改HKLM
+	`reg\s+delete.*hklm`,
+	`reg\s+delete.*hkey_local_machine`,
+	`remove-item.*hklm:.*-recurse`,
 }
 
 // 预编译的正则表达式缓存
 var compiledPatterns []*regexp.Regexp
-var compiledSafePipePatterns []*regexp.Regexp
-var compiledSafeRedirectPatterns []*regexp.Regexp
 var compileOnce sync.Once
-
-// 安全管道模式列表
-var safePipePatternStrings = []string{
-	`findstr.*\|.*findstr`,
-	`findstr.*\|.*more`,
-	`dir\s+.*\|.*findstr`,
-	`dir\s+.*\|.*find`,
-	`where\s+.*\|.*xargs`,
-	`get-process.*\|.*where-object`,
-	`get-childitem.*\|.*select-object`,
-	`get-content.*\|.*select-string`,
-}
-
-// 安全重定向模式列表
-var safeRedirectPatternStrings = []string{
-	`>\s*[a-zA-Z]:[/\\]temp[/\\]`,
-	`>\s*[a-zA-Z]:[/\\]tmp[/\\]`,
-	`>\s*\.\.\\`,
-	`>\s*\\`,
-	`>\s*[^/]*\.log`,
-	`>\s*[^/]*\.txt`,
-	`>\s*[^/]*\.out`,
-	`>>\s*\.log`,
-	`>>\s*\.txt`,
-	`>>\s*[a-zA-Z]:[/\\]temp[/\\]`,
-}
 
 // initializePatterns 初始化并编译所有正则表达式
 func initializePatterns() {
@@ -119,25 +59,10 @@ func initializePatterns() {
 			compiledPatterns = append(compiledPatterns, re)
 		}
 	}
-
-	// 编译安全管道模式
-	compiledSafePipePatterns = make([]*regexp.Regexp, 0, len(safePipePatternStrings))
-	for _, pattern := range safePipePatternStrings {
-		if re, err := regexp.Compile(pattern); err == nil {
-			compiledSafePipePatterns = append(compiledSafePipePatterns, re)
-		}
-	}
-
-	// 编译安全重定向模式
-	compiledSafeRedirectPatterns = make([]*regexp.Regexp, 0, len(safeRedirectPatternStrings))
-	for _, pattern := range safeRedirectPatternStrings {
-		if re, err := regexp.Compile(pattern); err == nil {
-			compiledSafeRedirectPatterns = append(compiledSafeRedirectPatterns, re)
-		}
-	}
 }
 
 // IsDangerousCommand 检测潜在的恶意命令
+// 采用黑名单策略：只拦截明确危险的命令，而不是要求所有命令都匹配白名单
 func IsDangerousCommand(command string) bool {
 	// 确保正则表达式已编译
 	compileOnce.Do(initializePatterns)
@@ -145,7 +70,7 @@ func IsDangerousCommand(command string) bool {
 	// 转换为小写进行检测
 	lowerCommand := strings.ToLower(command)
 
-	// 首先检查危险命令模式，检查是否在引号外
+	// 检查危险命令模式（黑名单）
 	for _, re := range compiledPatterns {
 		if matches := re.FindStringIndex(lowerCommand); matches != nil {
 			// 检查匹配位置是否在引号外
@@ -155,52 +80,35 @@ func IsDangerousCommand(command string) bool {
 		}
 	}
 
-	// 检查是否包含可疑的字符序列（但排除引号内的）
-	suspiciousChars := []string{
-		";",
-		"|",
-		"&",
-		"`",
-		"$(",
-		">>",
-		"<<",
+	// 检查特别危险的字符组合（只拦截明确的恶意模式）
+	dangerousSequences := []struct {
+		pattern string
+		desc    string
+	}{
+		{";rm ", "命令注入删除文件"},
+		{";del ", "命令注入删除文件"},
+		{"; rm ", "命令注入删除文件"},
+		{"; del ", "命令注入删除文件"},
+		{"| rm ", "管道删除文件"},
+		{"| del ", "管道删除文件"},
+		{"`rm ", "反引号命令注入"},
+		{"`del ", "反引号命令注入"},
+		{"$(rm ", "命令替换删除"},
+		{"$(del ", "命令替换删除"},
 	}
 
-	// 如果命令中包含这些字符且不是在引号内，则可能危险
-	for _, char := range suspiciousChars {
-		if strings.Contains(command, char) {
-			// 找到字符的所有位置
-			indices := []int{}
-			start := 0
-			for {
-				idx := strings.Index(command[start:], char)
-				if idx == -1 {
-					break
-				}
-				indices = append(indices, start+idx)
-				start = start + idx + 1
-			}
-
-			// 检查每个出现的位置
-			for _, pos := range indices {
-				if !isInQuotes(command, pos) {
-					// 对于一些常见的安全操作，允许使用管道和重定向
-					if char == "|" && isSafePipeUsage(command) {
-						continue
-					}
-					if char == ">" && isSafeRedirectUsage(command) {
-						continue
-					}
-					if char == ">>" && isSafeRedirectUsage(command) {
-						continue
-					}
-					// 发现不在引号内的危险字符
-					return true
-				}
+	for _, seq := range dangerousSequences {
+		if strings.Contains(lowerCommand, seq.pattern) {
+			// 检查是否在引号内
+			idx := strings.Index(lowerCommand, seq.pattern)
+			if idx >= 0 && !isInQuotes(command, idx) {
+				return true
 			}
 		}
 	}
 
+	// 允许所有其他命令（包括管道、重定向、命令链接等）
+	// 这是一个更宽松的策略，信任用户不会执行恶意命令
 	return false
 }
 
@@ -270,7 +178,7 @@ func isInQuotes(command string, pos int) bool {
 func isInHereString(command string, pos int) bool {
 	// 查找所有 @" 或 @' 开始标记
 	hereStringStarts := []struct {
-		pos     int
+		pos      int
 		isDouble bool // true = @", false = @'
 	}{}
 
@@ -317,36 +225,6 @@ func isInHereString(command string, pos int) bool {
 			if pos > start.pos+1 && pos < actualEndPos {
 				return true
 			}
-		}
-	}
-
-	return false
-}
-
-// isSafePipeUsage 检查安全的管道使用（使用预编译的正则表达式）
-func isSafePipeUsage(command string) bool {
-	// 确保正则表达式已编译
-	compileOnce.Do(initializePatterns)
-
-	lowerCommand := strings.ToLower(command)
-	for _, re := range compiledSafePipePatterns {
-		if re.MatchString(lowerCommand) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// isSafeRedirectUsage 检查安全的重定向使用（使用预编译的正则表达式）
-func isSafeRedirectUsage(command string) bool {
-	// 确保正则表达式已编译
-	compileOnce.Do(initializePatterns)
-
-	lowerCommand := strings.ToLower(command)
-	for _, re := range compiledSafeRedirectPatterns {
-		if re.MatchString(lowerCommand) {
-			return true
 		}
 	}
 

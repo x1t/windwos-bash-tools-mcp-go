@@ -77,11 +77,11 @@ func (suite *BashHandlerTestSuite) TestBashHandler_InvalidTimeout() {
 // TestBashHandler_DangerousCommand 测试危险命令拦截（Windows专用）
 func (suite *BashHandlerTestSuite) TestBashHandler_DangerousCommand() {
 	// 仅测试Windows危险命令（已移除Linux命令如 rm -rf /）
+	// 更新为符合新的宽松黑名单策略
 	dangerousCommands := []string{
-		"del /s C:\\Windows",
+		"del /f /s C:\\Windows", // 需要 /f 和 /s 才会被拦截
 		"format C:",
 		"shutdown /s",
-		"reboot",
 		"rd /s /q C:\\",
 		"diskpart",
 	}

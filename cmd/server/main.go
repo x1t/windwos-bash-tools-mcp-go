@@ -8,12 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"mcp-bash-tools/internal/executor"
 	"mcp-bash-tools/internal/security"
+	"mcp-bash-tools/internal/windows"
 
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -93,6 +95,7 @@ type BackgroundTask struct {
 	TempFile  string             `json:"tempFile,omitempty"` // 临时文件路径用于存储输出
 	Process   *os.Process        `json:"-"`                  // 进程句柄，用于终止进程
 	Cancel    context.CancelFunc `json:"-"`                  // Context取消函数，用于终止命令
+	Job       *windows.JobObject `json:"-"`                  // Windows Job Object，用于管理进程树
 }
 
 // ShellExecutorInterface 定义Shell执行器接口
@@ -419,6 +422,7 @@ func (s *MCPServer) KillShellHandler(ctx context.Context, req *mcp.CallToolReque
 	cancelFunc := task.Cancel
 	tempFilePath := task.TempFile
 	wasRunning := task.Status == "running"
+	job := task.Job
 
 	// 更新任务状态
 	if wasRunning {
@@ -431,15 +435,52 @@ func (s *MCPServer) KillShellHandler(ctx context.Context, req *mcp.CallToolReque
 	s.mutex.Unlock()
 
 	// 在锁外部执行实际的进程终止和资源清理
-	// 先调用Cancel函数取消Context
+	// 优先使用 Job Object 终止整个进程树
+	if job != nil && runtime.GOOS == "windows" {
+		fmt.Fprintf(os.Stderr, "Terminating process tree using Job Object...\n")
+		if err := job.Terminate(1); err != nil {
+			fmt.Fprintf(os.Stderr, "Note: Job.Terminate failed: %v, trying other methods\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "Successfully terminated process tree using Job Object\n")
+			// 关闭 Job Object
+			job.Close()
+			// 清理临时文件
+			if tempFilePath != "" {
+				if err := os.Remove(tempFilePath); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to remove temp file %s: %v\n", tempFilePath, err)
+				}
+			}
+			fmt.Fprintf(os.Stderr, "Background task %s killed successfully\n", args.ShellID)
+			return nil, KillShellResult{
+				Message: fmt.Sprintf("Background task %s killed successfully", args.ShellID),
+				ShellID: args.ShellID,
+			}, nil
+		}
+	}
+
+	// 回退方案：先调用Cancel函数取消Context
 	if cancelFunc != nil {
 		cancelFunc()
 	}
 
-	// 强制终止进程（如果进程仍在运行）
-	if process != nil {
+	// 强制终止进程树（Windows需要特殊处理）
+	if process != nil && runtime.GOOS == "windows" {
+		// 在Windows上使用taskkill终止整个进程树
+		// 这样可以确保所有子进程（如pnpm启动的node/vite）都被终止
+		killCmd := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", process.Pid))
+		if err := killCmd.Run(); err != nil {
+			// 如果taskkill失败，尝试使用Go的Kill方法
+			fmt.Fprintf(os.Stderr, "Note: taskkill failed: %v, trying process.Kill()\n", err)
+			if err := process.Kill(); err != nil {
+				// 进程可能已经退出，忽略错误
+				fmt.Fprintf(os.Stderr, "Note: process kill returned: %v (may have already exited)\n", err)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "Successfully killed process tree with PID %d\n", process.Pid)
+		}
+	} else if process != nil {
+		// 非 Windows 系统，直接使用 Kill
 		if err := process.Kill(); err != nil {
-			// 进程可能已经退出，忽略错误
 			fmt.Fprintf(os.Stderr, "Note: process kill returned: %v (may have already exited)\n", err)
 		}
 	}
@@ -467,6 +508,7 @@ func (s *MCPServer) executeBackgroundCommand(task *BackgroundTask, timeout int) 
 
 	// 创建可取消的context（不设置超时）
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // 确保在函数退出时释放资源
 
 	// 创建临时文件来存储输出（使用更具描述性的前缀）
 	tempFile, err := os.CreateTemp("", "mcp_bash_output_*.txt")
@@ -476,6 +518,22 @@ func (s *MCPServer) executeBackgroundCommand(task *BackgroundTask, timeout int) 
 		task.Error = fmt.Sprintf("Failed to create temp file: %v", err)
 		s.mutex.Unlock()
 		return
+	}
+	tempFilePath := tempFile.Name()
+	// 立即关闭文件，后续写入时重新打开（避免Windows文件锁问题）
+	tempFile.Close()
+
+	// 创建 Job Object（仅 Windows）
+	var job *windows.JobObject
+	if runtime.GOOS == "windows" {
+		jobName := fmt.Sprintf("mcp_bash_job_%s", task.ID)
+		job, err = windows.CreateJobObject(jobName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to create Job Object: %v, will use fallback method\n", err)
+			job = nil
+		} else {
+			fmt.Fprintf(os.Stderr, "Created Job Object: %s\n", jobName)
+		}
 	}
 
 	// 获取Shell执行器的首选Shell路径
@@ -487,12 +545,15 @@ func (s *MCPServer) executeBackgroundCommand(task *BackgroundTask, timeout int) 
 	}
 
 	// 在goroutine外部创建cmd，以便超时处理时能访问
-	cmd := exec.CommandContext(ctx, shellPath, "-Command", task.Command)
+	// 强制设置控制台输出编码为UTF-8 (CodePage 65001)
+	cmdArgs := fmt.Sprintf("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; %s", task.Command)
+	cmd := exec.CommandContext(ctx, shellPath, "-NoProfile", "-Command", cmdArgs)
 
 	// 加锁保护任务字段赋值
 	s.mutex.Lock()
-	task.TempFile = tempFile.Name()
+	task.TempFile = tempFilePath
 	task.Cancel = cancel
+	task.Job = job
 	s.mutex.Unlock()
 
 	// 使用同步机制保护文件写入
@@ -507,21 +568,21 @@ func (s *MCPServer) executeBackgroundCommand(task *BackgroundTask, timeout int) 
 	// 使用WaitGroup等待所有goroutine完成
 	var wg sync.WaitGroup
 
-	go s.executeCommandWithTask(cmd, task, tempFile, &writeMutex, &wg, done)
+	go s.executeCommandWithTask(cmd, task, tempFilePath, &writeMutex, &wg, done)
 
 	// 等待命令完成（后台任务无超时限制）
 	select {
 	case result := <-done:
 		cancel() // 命令完成后取消context
-		s.handleCommandCompletion(task, result, tempFile)
+		s.handleCommandCompletion(task, result, tempFilePath)
 	case <-ctx.Done():
 		// Context被取消（通过kill_shell）
-		s.handleCommandCancellation(task, cmd, tempFile, done, &wg)
+		s.handleCommandCancellation(task, cmd, tempFilePath, done, &wg)
 	}
 }
 
 // executeCommand 执行命令并处理输出
-func (s *MCPServer) executeCommandWithTask(cmd *exec.Cmd, task *BackgroundTask, tempFile *os.File, writeMutex *sync.Mutex, wg *sync.WaitGroup, done chan<- struct {
+func (s *MCPServer) executeCommandWithTask(cmd *exec.Cmd, task *BackgroundTask, tempFilePath string, writeMutex *sync.Mutex, wg *sync.WaitGroup, done chan<- struct {
 	err      error
 	exitCode int
 }) {
@@ -562,12 +623,22 @@ func (s *MCPServer) executeCommandWithTask(cmd *exec.Cmd, task *BackgroundTask, 
 	// 保存进程句柄到task，以便外部可以终止进程
 	s.mutex.Lock()
 	task.Process = cmd.Process
+
+	// 将进程添加到 Job Object（仅 Windows）
+	if task.Job != nil && runtime.GOOS == "windows" {
+		if err := task.Job.AddProcess(cmd.Process); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to add process to Job Object: %v\n", err)
+			// 不是致命错误，继续执行
+		} else {
+			fmt.Fprintf(os.Stderr, "Added process %d to Job Object\n", cmd.Process.Pid)
+		}
+	}
 	s.mutex.Unlock()
 
 	// 启动输出读取goroutine
 	wg.Add(2)
-	go s.readOutputPipe(stdout, tempFile, writeMutex, wg)
-	go s.readErrorPipe(stderr, tempFile, writeMutex, wg)
+	go s.readOutputPipe(stdout, tempFilePath, writeMutex, wg)
+	go s.readErrorPipe(stderr, tempFilePath, writeMutex, wg)
 
 	// 等待命令完成
 	cmdErr := cmd.Wait()
@@ -584,31 +655,43 @@ func (s *MCPServer) executeCommandWithTask(cmd *exec.Cmd, task *BackgroundTask, 
 }
 
 // readOutputPipe 读取stdout并写入临时文件
-func (s *MCPServer) readOutputPipe(stdout io.ReadCloser, tempFile *os.File, writeMutex *sync.Mutex, wg *sync.WaitGroup) {
+func (s *MCPServer) readOutputPipe(stdout io.ReadCloser, tempFilePath string, writeMutex *sync.Mutex, wg *sync.WaitGroup) {
 	defer wg.Done()
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		line := scanner.Text()
 		writeMutex.Lock()
-		if _, err := tempFile.WriteString(line + "\n"); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to write to temp file: %v\n", err)
+		// 每次写入都重新打开文件，以避免长时间持有文件锁
+		f, err := os.OpenFile(tempFilePath, os.O_APPEND|os.O_WRONLY, 0644)
+		if err == nil {
+			if _, err := f.WriteString(line + "\n"); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to write to temp file: %v\n", err)
+			}
+			f.Close()
+		} else {
+			fmt.Fprintf(os.Stderr, "Failed to open temp file for writing: %v\n", err)
 		}
-		tempFile.Sync()
 		writeMutex.Unlock()
 	}
 }
 
 // readErrorPipe 读取stderr并写入临时文件
-func (s *MCPServer) readErrorPipe(stderr io.ReadCloser, tempFile *os.File, writeMutex *sync.Mutex, wg *sync.WaitGroup) {
+func (s *MCPServer) readErrorPipe(stderr io.ReadCloser, tempFilePath string, writeMutex *sync.Mutex, wg *sync.WaitGroup) {
 	defer wg.Done()
 	scanner := bufio.NewScanner(stderr)
 	for scanner.Scan() {
 		line := scanner.Text()
 		writeMutex.Lock()
-		if _, err := tempFile.WriteString("ERROR: " + line + "\n"); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to write to temp file: %v\n", err)
+		// 每次写入都重新打开文件，以避免长时间持有文件锁
+		f, err := os.OpenFile(tempFilePath, os.O_APPEND|os.O_WRONLY, 0644)
+		if err == nil {
+			if _, err := f.WriteString("ERROR: " + line + "\n"); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to write to temp file: %v\n", err)
+			}
+			f.Close()
+		} else {
+			fmt.Fprintf(os.Stderr, "Failed to open temp file for writing: %v\n", err)
 		}
-		tempFile.Sync()
 		writeMutex.Unlock()
 	}
 }
@@ -617,17 +700,12 @@ func (s *MCPServer) readErrorPipe(stderr io.ReadCloser, tempFile *os.File, write
 func (s *MCPServer) handleCommandCompletion(task *BackgroundTask, result struct {
 	err      error
 	exitCode int
-}, tempFile *os.File) {
+}, tempFilePath string) {
 	execErr := result.err
 	actualExitCode := result.exitCode
 
-	// 关闭临时文件
-	if err := tempFile.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to close temp file: %v\n", err)
-	}
-
 	// 读取完整的输出内容
-	tempFilePath := task.TempFile
+	// 使用 OpenFile 和 ReadAll 确保在读取时不被写入锁阻塞（最好加个重试机制，但目前先简单处理）
 	outputContent, readErr := os.ReadFile(tempFilePath)
 	if readErr != nil {
 		s.mutex.Lock()
@@ -665,13 +743,33 @@ func (s *MCPServer) handleCommandCompletion(task *BackgroundTask, result struct 
 }
 
 // handleCommandCancellation 处理命令被取消（通过kill_shell）
-func (s *MCPServer) handleCommandCancellation(task *BackgroundTask, cmd *exec.Cmd, tempFile *os.File, done chan struct {
+func (s *MCPServer) handleCommandCancellation(task *BackgroundTask, cmd *exec.Cmd, tempFilePath string, done chan struct {
 	err      error
 	exitCode int
 }, wg *sync.WaitGroup) {
-	// 被取消，强制终止进程
+	// 被取消，强制终止进程树（Windows需要特殊处理）
 	if cmd.Process != nil {
-		cmd.Process.Kill()
+		// 优先使用 Job Object
+		s.mutex.RLock()
+		job := task.Job
+		s.mutex.RUnlock()
+
+		if job != nil && runtime.GOOS == "windows" {
+			fmt.Fprintf(os.Stderr, "Terminating process tree using Job Object in cancellation...\n")
+			if err := job.Terminate(1); err != nil {
+				fmt.Fprintf(os.Stderr, "Note: Job.Terminate failed in cancellation: %v\n", err)
+			}
+			job.Close()
+		} else if runtime.GOOS == "windows" {
+			// 回退到 taskkill
+			killCmd := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", cmd.Process.Pid))
+			if err := killCmd.Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "Note: taskkill failed in cancellation: %v, trying process.Kill()\n", err)
+				cmd.Process.Kill()
+			}
+		} else {
+			cmd.Process.Kill()
+		}
 	}
 	// 等待输出 goroutine 完成后再关闭文件
 	wg.Wait()
@@ -680,14 +778,6 @@ func (s *MCPServer) handleCommandCancellation(task *BackgroundTask, cmd *exec.Cm
 	case <-done:
 	case <-time.After(DoneChannelTimeout):
 	}
-	if err := tempFile.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to close temp file: %v\n", err)
-	}
-
-	// 获取临时文件路径
-	s.mutex.RLock()
-	tempFilePath := task.TempFile
-	s.mutex.RUnlock()
 
 	// 读取已有的输出
 	var outputStr string

