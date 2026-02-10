@@ -196,8 +196,9 @@ function Main {
         Write-ColorOutput "   直接运行: .\$($config.OutputPath)" "Gray"
         Write-ColorOutput "   MCP配置:" "Gray"
         Write-ColorOutput "   `"mcpServers`": {" "Gray"
-        Write-ColorOutput "     `"bash-tools``: {" "Gray"
-        Write-ColorOutput "       `"command`": `"$((Resolve-Path $config.OutputPath).Path)`"" "Gray"
+        Write-ColorOutput "     `"bash-tools`": {" "Gray"
+        $jsonPath = (Resolve-Path $config.OutputPath).Path.Replace('\', '\\')
+        Write-ColorOutput "       `"command`": `"$jsonPath`"" "Gray"
         Write-ColorOutput "     }" "Gray"
         Write-ColorOutput "   }" "Gray"
         
